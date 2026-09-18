@@ -1,0 +1,48 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "CommonJS",
+    "moduleResolution": "Node",
+    "lib": [
+      "ES2022",
+      "DOM"
+    ],
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "resolveJsonModule": true,
+    "declaration": false,
+    "outDir": "./dist",
+    "rootDir": ".",
+    "baseUrl": "./",
+    "ignoreDeprecations": "6.0",
+    "jsx": "react-jsx",
+    "experimentalDecorators": true,
+    "emitDecoratorMetadata": true,
+    "paths": {
+      "@/*": [
+        "client/src/*"
+      ],
+      "@server/*": [
+        "server/*"
+      ],
+      "@client/*": [
+        "client/*"
+      ],
+      "@shared/*": [
+        "shared/*"
+      ]
+    }
+  },
+  "include": [
+    "server/**/*",
+    "shared/**/*"
+  ],
+  "exclude": [
+    "node_modules",
+    "dist",
+    "client",
+    "vite.config.ts"
+  ]
+}

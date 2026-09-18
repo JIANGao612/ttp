@@ -1,0 +1,1 @@
+export * as adData from './ad-data';
