@@ -12,8 +12,8 @@ async function bootstrap() {
     app.enableCors();
 
     // 4. 启动 HTTP 服务器，监听 3000 端口
-    await app.listen(3000);
-    console.log('🚀 Server is running on http://localhost:3000');
+    await app.listen(3000, '0.0.0.0');   // ← 加 '0.0.0.0'
+    console.log('🚀 Server is running on http://0.0.0.0:3000');
 }
 
 bootstrap();

@@ -16,7 +16,9 @@ export default defineConfig({
         },
     },
     server: {
+        host: '0.0.0.0',   // ← 加这一行
         port: 5173,
+        strictPort: true,  // ← 建议加上，避免端口乱跳
         proxy: {
             '/api': {
                 target: 'http://localhost:3000',
