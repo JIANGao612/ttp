@@ -109,7 +109,7 @@ export const getSummary = (params: AdDataFilterParams) =>
 export const getTrend = (params: AdDataFilterParams) =>
     apiClient.get<TrendResponse>('/ad-data/trend', {params, paramsSerializer});
 
-export const getAdDataList = (params: AdDataListParams) =>
+export const  getAdDataList = (params: AdDataListParams) =>
     apiClient.get<AdDataListResponse>('/ad-data/list', {params, paramsSerializer});
 
 export const getCountryReport = (params: AdDataFilterParams) =>
