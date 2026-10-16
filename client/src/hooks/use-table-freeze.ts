@@ -1,15 +1,20 @@
-import {useCallback, useLayoutEffect, useMemo, useRef, useState} from 'react';
+import {useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState} from 'react';
+import {persistedStorageKey} from '@client/src/hooks/use-persisted-state';
+import {onPrefUserChanged, userPrefKey} from '@client/src/utils/user-pref';
+import {hydrateFromServer, prefSet} from '@client/src/utils/user-pref-sync';
 
 interface UseTableFreezeOptions {
     columnWidths: number[];
     rowCount: number;
     initialFrozenCols?: number;
     initialFrozenRows?: number;
+    persistKey?: string;
 }
 
 export interface TableFreezeApi {
     frozenCols: number;
     frozenRows: number;
+    headerHeight: number;
     leftOffsets: number[];
     rowTops: number[];
     colDividerX: number;
@@ -23,9 +28,31 @@ export interface TableFreezeApi {
     contentRef: React.RefObject<HTMLDivElement | null>;
 }
 
+function freezeStorageKey(persistKey: string): string {
+    return userPrefKey(persistedStorageKey(persistKey, 'frozenCols'));
+}
+
+function readFrozenCols(persistKey: string, fallback: number): number {
+    try {
+        const stored = localStorage.getItem(freezeStorageKey(persistKey));
+        if (stored !== null) {
+            const parsed: unknown = JSON.parse(stored);
+            if (typeof parsed === 'number' && Number.isFinite(parsed) && parsed >= 0) {
+                return parsed;
+            }
+        }
+    } catch {
+        // ignore storage/parse errors
+    }
+    return fallback;
+}
+
 export function useTableFreeze(options: UseTableFreezeOptions): TableFreezeApi {
-    const {columnWidths, rowCount} = options;
-    const [frozenCols, setFrozenCols] = useState(options.initialFrozenCols ?? 0);
+    const {columnWidths, rowCount, persistKey, initialFrozenCols} = options;
+    const [frozenCols, setFrozenCols] = useState<number>(() => {
+        if (persistKey) return readFrozenCols(persistKey, initialFrozenCols ?? 0);
+        return initialFrozenCols ?? 0;
+    });
     const [frozenRows, setFrozenRows] = useState(options.initialFrozenRows ?? 0);
     const [colDragX, setColDragX] = useState<number | null>(null);
     const [rowDragY, setRowDragY] = useState<number | null>(null);
@@ -34,6 +61,41 @@ export function useTableFreeze(options: UseTableFreezeOptions): TableFreezeApi {
     const headerElRef = useRef<HTMLElement | null>(null);
     const rowElsRef = useRef<(HTMLTableRowElement | null)[]>([]);
     const contentRef = useRef<HTMLDivElement | null>(null);
+
+    useEffect(() => {
+        if (!persistKey) return;
+        try {
+            localStorage.setItem(freezeStorageKey(persistKey), JSON.stringify(frozenCols));
+        } catch {
+            // ignore write errors (quota, private mode, etc.)
+        }
+        prefSet(persistedStorageKey(persistKey, 'frozenCols'), JSON.stringify(frozenCols));
+    }, [persistKey, frozenCols]);
+
+    useEffect(() => {
+        if (!persistKey) return;
+        hydrateFromServer(
+            persistedStorageKey(persistKey, 'frozenCols'),
+            freezeStorageKey(persistKey),
+            (raw: string) => {
+                try {
+                    const parsed: unknown = JSON.parse(raw);
+                    if (typeof parsed === 'number' && Number.isFinite(parsed) && parsed >= 0) {
+                        setFrozenCols(parsed);
+                    }
+                } catch {
+                    // ignore
+                }
+            },
+        );
+    }, [persistKey]);
+
+    useEffect(() => {
+        if (!persistKey) return undefined;
+        return onPrefUserChanged(() => {
+            setFrozenCols(readFrozenCols(persistKey, initialFrozenCols ?? 0));
+        });
+    }, [persistKey, initialFrozenCols]);
 
     const leftOffsets = useMemo(() => {
         const acc: number[] = [];
@@ -90,7 +152,7 @@ export function useTableFreeze(options: UseTableFreezeOptions): TableFreezeApi {
         const startX = dividerRect.left - contentRect.left;
         const startClientX = e.clientX;
         let lastX = startX;
-        document.body.style.cursor = 'col-resize';
+        document.body.style.cursor = 'grabbing';
         document.body.style.userSelect = 'none';
         const onMove = (ev: PointerEvent) => {
             lastX = Math.max(0, startX + (ev.clientX - startClientX));
@@ -149,6 +211,7 @@ export function useTableFreeze(options: UseTableFreezeOptions): TableFreezeApi {
     return {
         frozenCols,
         frozenRows,
+        headerHeight,
         leftOffsets,
         rowTops,
         colDividerX,

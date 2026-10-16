@@ -1,4 +1,5 @@
-import {apiClient} from '@client/src/utils/axios';
+// 保持手动 .data 解包的风格，与 ad-data.ts / market-consumption.ts 一致
+import {apiClient} from '@/utils/axios';
 import type {
     RegistrySyncTaskResponse,
     RegistrySyncStatusResponse,
@@ -40,13 +41,13 @@ export async function getBackfillStatus(taskId: string): Promise<{
     status: string;
     startedAt: number;
     result?: { total: number; recleaned: number; rematched: number; updated: number; refreshed: number };
-    error?: string;
+    error?: string
 } | null> {
     const res = await apiClient.get<{
         status: string;
         startedAt: number;
         result?: { total: number; recleaned: number; rematched: number; updated: number; refreshed: number };
-        error?: string;
+        error?: string
     } | null>(
         '/data-upload/backfill-identity-id/status',
         {params: {taskId}},
@@ -63,6 +64,9 @@ export async function listRecords(
             params: {
                 ...params,
                 country: params.country || undefined,
+                keywordFields: params.keywordFields?.length
+                    ? params.keywordFields.join(',')
+                    : undefined,
                 filters: params.filters ? JSON.stringify(params.filters) : undefined,
             },
         },
@@ -155,14 +159,24 @@ export async function updateProductionDate(
     return res.data;
 }
 
+export async function updateRejectionReason(
+    id: string,
+    rejectionReason: string,
+): Promise<{ success: boolean }> {
+    const res = await apiClient.patch<{ success: boolean }>(
+        `/creative-asset-registry/records/${id}/rejection-reason`,
+        {rejectionReason},
+    );
+    return res.data;
+}
+
 /** 获取创意资产和消耗数据的最新更新日期 */
 export async function getLastUpdated(): Promise<{
     registryUpdate: string;
     consumptionUpdate: string;
 }> {
-    const res = await apiClient.get<{
-        registryUpdate: string;
-        consumptionUpdate: string;
-    }>('/creative-asset-registry/last-updated');
+    const res = await apiClient.get<
+        { registryUpdate: string; consumptionUpdate: string }
+    >('/creative-asset-registry/last-updated');
     return res.data;
 }

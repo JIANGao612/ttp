@@ -11,12 +11,20 @@ import {
     DEFAULT_ROW_HEIGHT, DEFAULT_COL_WIDTH, ROW_HEADER_WIDTH, COL_HEADER_HEIGHT,
 } from './types';
 import type {CellData, CellStyle, MergeCell} from './types';
+import {effectiveMergeOrigin} from './types';
 import {cn} from '@/lib/utils';
 import FindReplaceDialog from './FindReplaceDialog';
 import ContextMenu from './ContextMenu';
 import {CellSelectionProvider} from './CellSelectionContext';
 import {toast} from 'sonner';
+import {isMobileDevice} from '@client/src/utils/mobile-env';
+import {Dialog, DialogContent, DialogHeader, DialogTitle} from '@client/src/components/ui/dialog';
+import Image from '@client/src/components/ui/image';
 import {assertDownloadAllowed} from '@client/src/utils/export-guard';
+import {isNonMetricHeader} from '@client/src/utils/header-classify';
+import {persistedStorageKey} from '@client/src/hooks/use-persisted-state';
+import {onPrefUserChanged, userPrefKey} from '@client/src/utils/user-pref';
+import {hydrateFromServer, prefSet} from '@client/src/utils/user-pref-sync';
 
 
 interface SpreadsheetProps {
@@ -28,6 +36,8 @@ interface SpreadsheetProps {
     rowHeights?: number[];
     frozenRows?: number;
     frozenCols?: number;
+    /** 提供后冻结列数可拖动调整并持久化到 localStorage */
+    freezeKey?: string;
     bottomFrozenRows?: number;
     className?: string;
     hideToolbar?: boolean;
@@ -37,8 +47,11 @@ interface SpreadsheetProps {
     onStateChange?: (state: { hiddenCols: number[]; hiddenRows: number[] }) => void;
     onScrollChange?: (scroll: { scrollLeft: number; scrollTop: number }) => void;
     onColumnResizeEnd?: (colWidths: number[]) => void;
+    onCellDoubleClick?: (row: number, col: number) => void;
     initialScrollLeft?: number;
     initialScrollTop?: number;
+    /** 复制为图片时的文件名（不含扩展名），移动端保存图片时使用 */
+    imageExportName?: string;
 }
 
 const FONT_FAMILIES: { label: string; value: string }[] = [
@@ -63,6 +76,7 @@ const Spreadsheet: React.FC<SpreadsheetProps> = ({
                                                      showAddRows = true,
                                                      frozenRows = 0,
                                                      frozenCols = 0,
+                                                     freezeKey,
                                                      bottomFrozenRows = 0,
                                                      className,
                                                      initialHiddenCols,
@@ -70,9 +84,12 @@ const Spreadsheet: React.FC<SpreadsheetProps> = ({
                                                      onStateChange,
                                                      onScrollChange,
                                                      onColumnResizeEnd,
+                                                     onCellDoubleClick,
                                                      initialScrollLeft = 0,
                                                      initialScrollTop = 0,
+                                                     imageExportName,
                                                  }) => {
+    const isMobile: boolean = isMobileDevice();
     const [rows, setRows] = useState(initialRows);
     const [cols] = useState(initialCols);
     const [cells, setCells] = useState<Map<string, CellData>>(() => {
@@ -90,6 +107,7 @@ const Spreadsheet: React.FC<SpreadsheetProps> = ({
         initialRowHeights || Array(initialRows).fill(DEFAULT_ROW_HEIGHT),
     );
     const [zoom, setZoom] = useState(100);
+    const [previewImage, setPreviewImage] = useState<{ url: string; name: string } | null>(null);
     const [isFullscreen, setIsFullscreen] = useState(false);
     const wrapperRef = useRef<HTMLDivElement>(null);
     const [selection, setSelection] = useState<{ startRow: number; startCol: number; endRow: number; endCol: number }>({
@@ -127,6 +145,7 @@ const Spreadsheet: React.FC<SpreadsheetProps> = ({
     const editInputRef = useRef<HTMLInputElement>(null);
     const selectionModeRef = useRef<'cell' | 'col' | 'row'>('cell');
     const hasUserSelectedRef = useRef(false);
+    const [selectionActive, setSelectionActive] = useState(false);
     const pendingScrollRestoreRef = useRef<{ top: number; left: number } | null>(null);
     const mouseDownPosRef = useRef<{ x: number; y: number } | null>(null);
     const dragThresholdMetRef = useRef(false);
@@ -163,25 +182,171 @@ const Spreadsheet: React.FC<SpreadsheetProps> = ({
         };
     }, [onColumnResizeEnd]);
 
+    const handleColumnAutoFit = useCallback((col: number) => {
+        const container = containerRef.current;
+        if (!container) return;
+        const cells = Array.from(
+            container.querySelectorAll<HTMLElement>(`td[data-col="${col}"]`),
+        );
+        let max = 40;
+        cells.forEach((cell: HTMLElement) => {
+            const prev = cell.style.whiteSpace;
+            cell.style.whiteSpace = 'nowrap';
+            if (cell.scrollWidth > max) max = cell.scrollWidth;
+            cell.style.whiteSpace = prev;
+        });
+        const width = Math.min(Math.max(40, max + 10), 480);
+        setColWidths((prev) => {
+            const next = [...prev];
+            next[col] = width;
+            if (onColumnResizeEnd) onColumnResizeEnd(next);
+            return next;
+        });
+    }, [onColumnResizeEnd]);
+
+    const freezeStorageKey = freezeKey
+        ? userPrefKey(persistedStorageKey(freezeKey, 'frozenCols'))
+        : '';
+    const [frozenCount, setFrozenCount] = useState<number>(() => {
+        if (freezeStorageKey) {
+            try {
+                const stored = localStorage.getItem(freezeStorageKey);
+                if (stored !== null) {
+                    const parsed: unknown = JSON.parse(stored);
+                    if (typeof parsed === 'number' && Number.isFinite(parsed) && parsed >= 0) {
+                        return Math.min(parsed, cols);
+                    }
+                }
+            } catch {
+                // 忽略无效的持久化值，回退到初始冻结列数
+            }
+        }
+        return frozenCols;
+    });
+    const [freezeDragging, setFreezeDragging] = useState(false);
+    const [freezeDividerHover, setFreezeDividerHover] = useState(false);
+    const [freezePillY, setFreezePillY] = useState<number | null>(null);
+
+    useEffect(() => {
+        if (!freezeStorageKey) return;
+        try {
+            localStorage.setItem(freezeStorageKey, JSON.stringify(frozenCount));
+        } catch {
+            // 忽略写入失败（隐私模式等）
+        }
+        if (freezeKey) {
+            prefSet(persistedStorageKey(freezeKey, 'frozenCols'), JSON.stringify(frozenCount));
+        }
+    }, [freezeStorageKey, freezeKey, frozenCount]);
+
+    useEffect(() => {
+        if (!freezeStorageKey) return undefined;
+        return onPrefUserChanged(() => {
+            let next = frozenCols;
+            try {
+                const stored = localStorage.getItem(freezeStorageKey);
+                if (stored !== null) {
+                    const parsed: unknown = JSON.parse(stored);
+                    if (typeof parsed === 'number' && Number.isFinite(parsed) && parsed >= 0) {
+                        next = Math.min(parsed, cols);
+                    }
+                }
+            } catch {
+                // 忽略无效值
+            }
+            setFrozenCount(next);
+        });
+    }, [freezeStorageKey, frozenCols, cols]);
+
+    useEffect(() => {
+        if (!freezeKey) return;
+        hydrateFromServer(
+            persistedStorageKey(freezeKey, 'frozenCols'),
+            freezeStorageKey,
+            (raw: string) => {
+                try {
+                    const parsed: unknown = JSON.parse(raw);
+                    if (typeof parsed === 'number' && Number.isInteger(parsed) && parsed >= 0) {
+                        setFrozenCount(Math.min(parsed, cols));
+                    }
+                } catch {
+                    // 忽略无效的服务端值，保留本地状态
+                }
+            },
+        );
+    }, [freezeKey, freezeStorageKey, cols]);
+
+    const handleFreezeHoverMove = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
+        const rect = e.currentTarget.getBoundingClientRect();
+        const y = e.clientY - rect.top;
+        setFreezePillY(Math.max(2, Math.min(y - 18, rect.height - 40)));
+    }, []);
+
+    const startFreezeDrag = useCallback((e: React.MouseEvent) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const sc = containerRef.current;
+        if (!sc) return;
+        const rect = sc.getBoundingClientRect();
+        const zf = zoom / 100;
+        setFreezeDragging(true);
+        document.body.style.cursor = 'grabbing';
+        document.body.style.userSelect = 'none';
+        const apply = (clientX: number) => {
+            const x = (clientX - rect.left + sc.scrollLeft) / zf - ROW_HEADER_WIDTH;
+            const edges: number[] = [0];
+            let acc = 0;
+            for (let i = 0; i < cols; i += 1) {
+                acc += hiddenCols.has(i) ? 0 : (colWidths[i] || DEFAULT_COL_WIDTH);
+                edges.push(acc);
+            }
+            let best = 0;
+            let bestDist = Number.POSITIVE_INFINITY;
+            for (let i = 0; i < edges.length; i += 1) {
+                const d = Math.abs((edges[i] ?? 0) - x);
+                if (d < bestDist) {
+                    bestDist = d;
+                    best = i;
+                }
+            }
+            setFrozenCount(Math.max(0, Math.min(cols - 1, best)));
+        };
+        const onMove = (ev: MouseEvent) => apply(ev.clientX);
+        const onUp = (ev: MouseEvent) => {
+            apply(ev.clientX);
+            document.removeEventListener('mousemove', onMove);
+            document.removeEventListener('mouseup', onUp);
+            document.body.style.cursor = '';
+            document.body.style.userSelect = '';
+            setFreezeDragging(false);
+        };
+        document.addEventListener('mousemove', onMove);
+        document.addEventListener('mouseup', onUp);
+    }, [zoom, cols, colWidths, hiddenCols]);
+
     const frozenColLefts = useMemo(() => {
         const offsets: number[] = [];
         let acc = ROW_HEADER_WIDTH;
-        for (let i = 0; i < frozenCols; i++) {
+        for (let i = 0; i < frozenCount; i++) {
             offsets.push(acc);
-            acc += colWidths[i] || DEFAULT_COL_WIDTH;
+            acc += hiddenCols.has(i) ? 0 : (colWidths[i] || DEFAULT_COL_WIDTH);
         }
         return offsets;
-    }, [frozenCols, colWidths]);
+    }, [frozenCount, colWidths, hiddenCols]);
+
+    const frozenEdge = frozenCount > 0
+        ? (frozenColLefts[frozenCount - 1] ?? ROW_HEADER_WIDTH) + (hiddenCols.has(frozenCount - 1) ? 0 : (colWidths[frozenCount - 1] || DEFAULT_COL_WIDTH))
+        : ROW_HEADER_WIDTH;
 
     const frozenRowTops = useMemo(() => {
         const offsets: number[] = [];
         let acc = 0;
         for (let i = 0; i < frozenRows; i++) {
             offsets.push(acc);
-            acc += rowHeights[i] || DEFAULT_ROW_HEIGHT;
+            acc += hiddenRows.has(i) ? 0 : (rowHeights[i] || DEFAULT_ROW_HEIGHT);
         }
         return offsets;
-    }, [frozenRows, rowHeights]);
+    }, [frozenRows, rowHeights, hiddenRows]);
 
     useEffect(() => {
         if (!stateChangeReadyRef.current) {
@@ -223,6 +388,35 @@ const Spreadsheet: React.FC<SpreadsheetProps> = ({
         };
     }, [onScrollChange]);
 
+    useEffect(() => {
+        const el = containerRef.current;
+        if (!el) return;
+        let raf = 0;
+        const repaintDualSticky = () => {
+            const dualCells = el.querySelectorAll<HTMLElement>('[data-dual-sticky]');
+            dualCells.forEach((cell: HTMLElement) => {
+                cell.style.transform = 'translate3d(0, 0, 0.01px)';
+            });
+            requestAnimationFrame(() => {
+                dualCells.forEach((cell: HTMLElement) => {
+                    cell.style.transform = '';
+                });
+            });
+        };
+        const handler = () => {
+            if (raf) return;
+            raf = requestAnimationFrame(() => {
+                raf = 0;
+                repaintDualSticky();
+            });
+        };
+        el.addEventListener('scroll', handler, {passive: true});
+        return () => {
+            el.removeEventListener('scroll', handler);
+            if (raf) cancelAnimationFrame(raf);
+        };
+    }, []);
+
     const getCell = useCallback((row: number, col: number): CellData | undefined => {
         return cells.get(cellKey(row, col));
     }, [cells]);
@@ -232,12 +426,37 @@ const Spreadsheet: React.FC<SpreadsheetProps> = ({
     }, [cells]);
 
     const getSelectionRange = useCallback(() => {
-        const minR = Math.min(selection.startRow, selection.endRow);
-        const maxR = Math.max(selection.startRow, selection.endRow);
-        const minC = Math.min(selection.startCol, selection.endCol);
-        const maxC = Math.max(selection.startCol, selection.endCol);
+        let minR = Math.min(selection.startRow, selection.endRow);
+        let maxR = Math.max(selection.startRow, selection.endRow);
+        let minC = Math.min(selection.startCol, selection.endCol);
+        let maxC = Math.max(selection.startCol, selection.endCol);
+        let changed = true;
+        while (changed) {
+            changed = false;
+            for (const m of merges) {
+                const mBottom = m.row + m.rowSpan - 1;
+                const mRight = m.col + m.colSpan - 1;
+                if (mBottom < minR || m.row > maxR || mRight < minC || m.col > maxC) continue;
+                if (m.row < minR) {
+                    minR = m.row;
+                    changed = true;
+                }
+                if (mBottom > maxR) {
+                    maxR = mBottom;
+                    changed = true;
+                }
+                if (m.col < minC) {
+                    minC = m.col;
+                    changed = true;
+                }
+                if (mRight > maxC) {
+                    maxC = mRight;
+                    changed = true;
+                }
+            }
+        }
         return {minR, maxR, minC, maxC};
-    }, [selection]);
+    }, [selection, merges]);
 
     const isInSelection = useCallback((row: number, col: number): boolean => {
         if (!hasUserSelectedRef.current) return false;
@@ -247,14 +466,33 @@ const Spreadsheet: React.FC<SpreadsheetProps> = ({
     }, [getSelectionRange, extraCells]);
 
     const selectionStats = useMemo(() => {
+        if (!selectionActive) return null;
         const {minR, maxR, minC, maxC} = getSelectionRange();
+
+        const isNonMetricCol = (c: number): boolean => {
+            if (frozenRows <= 0) return false;
+            const parts: string[] = [];
+            for (let r = 0; r < frozenRows; r++) {
+                const headerValue = cells.get(cellKey(r, c))?.value;
+                if (headerValue) parts.push(String(headerValue));
+            }
+            return parts.length > 0 && parts.every((p) => isNonMetricHeader(p));
+        };
+
+        let hiddenRowsInRange = 0;
+        for (let r = minR; r <= maxR; r++) {
+            if (hiddenRows.has(r)) hiddenRowsInRange += 1;
+        }
+        let hiddenColsInRange = 0;
+        for (let c = minC; c <= maxC; c++) {
+            if (hiddenCols.has(c)) hiddenColsInRange += 1;
+        }
 
         let sum = 0;
         let count = 0;
         for (let r = minR; r <= maxR; r++) {
-            if (hiddenRows.has(r)) continue;
             for (let c = minC; c <= maxC; c++) {
-                if (hiddenCols.has(c)) continue;
+                if (isNonMetricCol(c)) continue;
                 const merge = isInMerge(merges, r, c);
                 if (merge && !isMergeOrigin(merge, r, c)) continue;
                 const cell = cells.get(cellKey(r, c));
@@ -270,6 +508,8 @@ const Spreadsheet: React.FC<SpreadsheetProps> = ({
             }
         }
         for (const key of extraCells) {
+            const keyCol = Number(key.split(',')[1]);
+            if (Number.isFinite(keyCol) && isNonMetricCol(keyCol)) continue;
             const cell = cells.get(key);
             const raw = cell?.value ?? '';
             if (!raw) continue;
@@ -282,8 +522,8 @@ const Spreadsheet: React.FC<SpreadsheetProps> = ({
             }
         }
         if (count === 0) return null;
-        return {sum, count, average: sum / count};
-    }, [selection, cells, merges, hiddenRows, hiddenCols, extraCells, getSelectionRange]);
+        return {sum, count, average: sum / count, hiddenRowsInRange, hiddenColsInRange};
+    }, [selection, cells, merges, hiddenRows, hiddenCols, extraCells, getSelectionRange, selectionActive]);
 
     const pushHistory = useCallback((action: { type: string; undo: () => void; redo: () => void }) => {
         historyRef.current.push(action);
@@ -517,35 +757,39 @@ const Spreadsheet: React.FC<SpreadsheetProps> = ({
         });
     }, [handleCopy, getSelectionRange, cells, pushHistory]);
 
+    const pasteFromText = useCallback((text: string) => {
+        if (!text) return;
+        const lines = text.split('\n').map((l: string) => l.split('\t'));
+        const startR = selection.startRow;
+        const startC = selection.startCol;
+        const oldCells = new Map(cells);
+        const newCells = new Map(cells);
+        for (let r = 0; r < lines.length; r++) {
+            for (let c = 0; c < lines[r].length; c++) {
+                const row = startR + r;
+                const col = startC + c;
+                if (row >= rows || col >= cols) continue;
+                const key = cellKey(row, col);
+                const existing = newCells.get(key);
+                newCells.set(key, {value: lines[r][c], style: existing?.style});
+            }
+        }
+        setCells(newCells);
+        pushHistory({
+            type: 'paste',
+            undo: () => setCells(new Map(oldCells)),
+            redo: () => setCells(new Map(newCells)),
+        });
+    }, [selection, cells, rows, cols, pushHistory]);
+
     const handlePaste = useCallback(async () => {
         try {
             const text = await navigator.clipboard.readText();
-            if (!text) return;
-            const lines = text.split('\n').map((l) => l.split('\t'));
-            const startR = selection.startRow;
-            const startC = selection.startCol;
-            const oldCells = new Map(cells);
-            const newCells = new Map(cells);
-            for (let r = 0; r < lines.length; r++) {
-                for (let c = 0; c < lines[r].length; c++) {
-                    const row = startR + r;
-                    const col = startC + c;
-                    if (row >= rows || col >= cols) continue;
-                    const key = cellKey(row, col);
-                    const existing = newCells.get(key);
-                    newCells.set(key, {value: lines[r][c], style: existing?.style});
-                }
-            }
-            setCells(newCells);
-            pushHistory({
-                type: 'paste',
-                undo: () => setCells(new Map(oldCells)),
-                redo: () => setCells(new Map(newCells)),
-            });
+            pasteFromText(text);
         } catch {
-            // ignore
+            toast.error('无法读取剪贴板，选中单元格后按 Ctrl+V 粘贴');
         }
-    }, [selection, cells, rows, cols, pushHistory]);
+    }, [pasteFromText]);
 
     const handlePasteSpecial = useCallback(async (mode: 'values' | 'formats') => {
         if (mode === 'values') {
@@ -685,6 +929,7 @@ const Spreadsheet: React.FC<SpreadsheetProps> = ({
             pendingScrollRestoreRef.current = {top: container.scrollTop, left: container.scrollLeft};
         }
         hasUserSelectedRef.current = true;
+        setSelectionActive(true);
         e.preventDefault();
         setSelectionMode('col');
         setIsSelecting(true);
@@ -706,6 +951,7 @@ const Spreadsheet: React.FC<SpreadsheetProps> = ({
             pendingScrollRestoreRef.current = {top: container.scrollTop, left: container.scrollLeft};
         }
         hasUserSelectedRef.current = true;
+        setSelectionActive(true);
         e.preventDefault();
         setSelectionMode('row');
         setIsSelecting(true);
@@ -742,14 +988,13 @@ const Spreadsheet: React.FC<SpreadsheetProps> = ({
         }
     }, [hiddenCols, hiddenRows, selectionMode, isInSelection, getSelectionRange, rows, cols]);
 
-    const handleCopyAsImage = useCallback(async () => {
-        const {minR, maxR, minC, maxC} = getSelectionRange();
-
-        const tempContainer = document.createElement('div');
-        tempContainer.style.position = 'fixed';
-        tempContainer.style.left = '-9999px';
-        tempContainer.style.top = '0';
-        tempContainer.style.backgroundColor = '#ffffff';
+    const handleCopyAsImage = useCallback(async (rangeOverride?: {
+        minR: number;
+        maxR: number;
+        minC: number;
+        maxC: number
+    }) => {
+        const {minR, maxR, minC, maxC} = rangeOverride ?? getSelectionRange();
 
         const visibleCols: number[] = [];
         const visibleRows: number[] = [];
@@ -774,21 +1019,26 @@ const Spreadsheet: React.FC<SpreadsheetProps> = ({
             totalHeight += rowHeights[r];
         }
 
-        const gridEl = document.createElement('div');
-        gridEl.style.position = 'relative';
-        gridEl.style.width = `${totalWidth}px`;
-        gridEl.style.height = `${totalHeight}px`;
-        gridEl.style.boxSizing = 'border-box';
-        gridEl.style.backgroundColor = '#ffffff';
+        const isMobileExport = isMobileDevice();
+        const maxDim = isMobileExport ? 8192 : 16384;
+        const maxArea = isMobileExport ? 16777216 : 268435456;
+        const scale = [2, 1.5, 1, 0.75, 0.5].find((s) => (
+            totalWidth * s <= maxDim
+            && totalHeight * s <= maxDim
+            && totalWidth * totalHeight * s * s <= maxArea
+        )) ?? 0.5;
+
+        const drawCells: { x: number; y: number; w: number; h: number; value: string; style: CellStyle }[] = [];
 
         for (let vi = 0; vi < visibleRows.length; vi++) {
             const r = visibleRows[vi];
             for (let vj = 0; vj < visibleCols.length; vj++) {
                 const c = visibleCols[vj];
                 const merge = isInMerge(merges, r, c);
-                if (merge && !isMergeOrigin(merge, r, c)) continue;
+                const mergeEff = merge ? effectiveMergeOrigin(merge, hiddenCols, hiddenRows) : null;
+                if (merge && (!mergeEff || mergeEff.row !== r || mergeEff.col !== c)) continue;
 
-                const cell = getCell(r, c);
+                const cell = merge ? getCell(merge.row, merge.col) : getCell(r, c);
                 const style = cell?.style || {};
                 const value = cell?.value || '';
 
@@ -797,84 +1047,106 @@ const Spreadsheet: React.FC<SpreadsheetProps> = ({
 
                 let cellWidth = colWidths[c];
                 let cellHeight = rowHeights[r];
-                if (merge && isMergeOrigin(merge, r, c)) {
+                if (merge && mergeEff) {
                     cellWidth = 0;
-                    for (let i = 0; i < merge.colSpan; i++) {
-                        const colIdx = c + i;
+                    for (let colIdx = c; colIdx < merge.col + merge.colSpan; colIdx++) {
                         if (!hiddenCols.has(colIdx) && colIdx >= minC && colIdx <= maxC) {
                             cellWidth += colWidths[colIdx];
                         }
                     }
                     cellHeight = 0;
-                    for (let i = 0; i < merge.rowSpan; i++) {
-                        const rowIdx = r + i;
+                    for (let rowIdx = r; rowIdx < merge.row + merge.rowSpan; rowIdx++) {
                         if (!hiddenRows.has(rowIdx) && rowIdx >= minR && rowIdx <= maxR) {
                             cellHeight += rowHeights[rowIdx];
                         }
                     }
                 }
 
-                const cellDiv = document.createElement('div');
-                cellDiv.style.position = 'absolute';
-                cellDiv.style.left = `${left}px`;
-                cellDiv.style.top = `${top}px`;
-                cellDiv.style.width = `${cellWidth}px`;
-                cellDiv.style.height = `${cellHeight}px`;
-                cellDiv.style.boxSizing = 'border-box';
-                cellDiv.style.border = '1px solid #e5e7eb';
-                cellDiv.style.backgroundColor = style.bgColor || '#ffffff';
-                cellDiv.style.overflow = 'hidden';
-                cellDiv.style.padding = '0 4px';
-                cellDiv.style.textAlign = style.align === 'left' ? 'left' : style.align === 'right' ? 'right' : 'center';
-                cellDiv.style.fontWeight = style.bold ? '700' : '400';
-                cellDiv.style.fontStyle = style.italic ? 'italic' : 'normal';
-                const decorations: string[] = [];
-                if (style.underline) decorations.push('underline');
-                if (style.strikethrough) decorations.push('line-through');
-                cellDiv.style.textDecoration = decorations.join(' ') || 'none';
-                cellDiv.style.fontFamily = style.fontFamily || DEFAULT_FONT_FAMILY;
-                cellDiv.style.fontSize = `${style.fontSize || DEFAULT_FONT_SIZE}px`;
-                cellDiv.style.color = style.color || '#000';
-                cellDiv.style.whiteSpace = 'nowrap';
-                cellDiv.style.textOverflow = 'ellipsis';
-                cellDiv.style.verticalAlign = 'middle';
-
-                const span = document.createElement('span');
-                span.style.display = 'inline-block';
-                span.style.lineHeight = 'normal';
-                span.style.verticalAlign = 'middle';
-                span.style.width = '100%';
-                span.style.textAlign = 'inherit';
-                span.textContent = value;
-
-                cellDiv.appendChild(span);
-
-                gridEl.appendChild(cellDiv);
+                drawCells.push({x: left, y: top, w: cellWidth, h: cellHeight, value, style});
             }
         }
 
-        tempContainer.appendChild(gridEl);
-        document.body.appendChild(tempContainer);
+        const canvas = document.createElement('canvas');
+        canvas.width = Math.max(1, Math.round(totalWidth * scale));
+        canvas.height = Math.max(1, Math.round(totalHeight * scale));
 
         try {
-            await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
-            const {default: html2canvas} = await import('html2canvas');
-            const canvas = await html2canvas(gridEl, {
-                backgroundColor: '#ffffff',
-                scale: 2,
-                useCORS: true,
-                logging: false,
-            });
+            const ctx = canvas.getContext('2d');
+            if (!ctx) {
+                toast.error('图片生成失败，请重试');
+                return;
+            }
+            ctx.scale(scale, scale);
+            ctx.fillStyle = '#ffffff';
+            ctx.fillRect(0, 0, totalWidth, totalHeight);
+
+            for (const d of drawCells) {
+                ctx.fillStyle = d.style.bgColor || '#ffffff';
+                ctx.fillRect(d.x, d.y, d.w, d.h);
+                ctx.strokeStyle = '#e5e7eb';
+                ctx.lineWidth = 1;
+                ctx.strokeRect(d.x + 0.5, d.y + 0.5, d.w - 1, d.h - 1);
+                if (!d.value) continue;
+                const fontSize = d.style.fontSize || DEFAULT_FONT_SIZE;
+                ctx.save();
+                ctx.beginPath();
+                ctx.rect(d.x + 1, d.y + 1, d.w - 2, d.h - 2);
+                ctx.clip();
+                ctx.font = `${d.style.italic ? 'italic ' : ''}${d.style.bold ? '700' : '400'} ${fontSize}px ${d.style.fontFamily || DEFAULT_FONT_FAMILY}`;
+                ctx.fillStyle = d.style.color || '#000';
+                ctx.textBaseline = 'middle';
+                const ty = d.y + d.h / 2;
+                if (d.style.align === 'left') {
+                    ctx.textAlign = 'left';
+                    ctx.fillText(d.value, d.x + 4, ty);
+                } else if (d.style.align === 'right') {
+                    ctx.textAlign = 'right';
+                    ctx.fillText(d.value, d.x + d.w - 4, ty);
+                } else {
+                    ctx.textAlign = 'center';
+                    ctx.fillText(d.value, d.x + d.w / 2, ty);
+                }
+                if (d.style.underline || d.style.strikethrough) {
+                    const tw = ctx.measureText(d.value).width;
+                    let tx = d.x + 4;
+                    if (d.style.align === 'right') tx = d.x + d.w - 4 - tw;
+                    else if (d.style.align !== 'left') tx = d.x + (d.w - tw) / 2;
+                    ctx.strokeStyle = d.style.color || '#000';
+                    ctx.beginPath();
+                    if (d.style.strikethrough) {
+                        ctx.moveTo(tx, ty);
+                        ctx.lineTo(tx + tw, ty);
+                    }
+                    if (d.style.underline) {
+                        ctx.moveTo(tx, ty + fontSize * 0.4);
+                        ctx.lineTo(tx + tw, ty + fontSize * 0.4);
+                    }
+                    ctx.stroke();
+                }
+                ctx.restore();
+            }
 
             const blob = await new Promise<Blob | null>((resolve) =>
                 canvas.toBlob(resolve, 'image/png'),
             );
 
             if (!blob) {
-                toast.error('复制为图片失败');
+                toast.error('图片生成失败，请重试');
                 return;
             }
-
+            if (isMobileDevice()) {
+                const fileName = `${imageExportName ?? '报表'}.png`;
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = fileName;
+                document.body.appendChild(a);
+                a.click();
+                a.remove();
+                setPreviewImage({url, name: fileName});
+                toast.info('图片已生成，请留意系统下载通知；若未自动保存，请长按弹窗中的图片保存到相册');
+                return;
+            }
             if (navigator.clipboard && window.ClipboardItem) {
                 await navigator.clipboard.write([
                     new ClipboardItem({'image/png': blob}),
@@ -886,18 +1158,17 @@ const Spreadsheet: React.FC<SpreadsheetProps> = ({
                 const a = document.createElement('a');
                 a.href = url;
                 a.download = 'selection.png';
+                document.body.appendChild(a);
                 a.click();
-                URL.revokeObjectURL(url);
-                toast.success('已下载为图片');
+                a.remove();
+                toast.info('图片已触发下载，请在下载目录查看；若无文件请使用选区复制');
             }
         } catch {
-            toast.error('复制为图片失败');
-        } finally {
-            document.body.removeChild(tempContainer);
+            toast.error('图片生成失败，请重试');
         }
-    }, [getSelectionRange, getCell, merges, colWidths, rowHeights, hiddenCols, hiddenRows]);
+    }, [getSelectionRange, getCell, merges, colWidths, rowHeights, hiddenCols, hiddenRows, imageExportName]);
 
-    const handleSelectAll = useCallback(() => {
+    const getVisibleRange = useCallback(() => {
         let firstVisibleCol = -1;
         let lastVisibleCol = -1;
         for (let c = 0; c < cols; c++) {
@@ -914,21 +1185,41 @@ const Spreadsheet: React.FC<SpreadsheetProps> = ({
                 lastVisibleRow = r;
             }
         }
-        if (firstVisibleCol === -1 || firstVisibleRow === -1) return;
+        if (firstVisibleCol === -1 || firstVisibleRow === -1) return null;
+        return {firstVisibleRow, lastVisibleRow, firstVisibleCol, lastVisibleCol};
+    }, [cols, rows, hiddenCols, hiddenRows]);
+
+    const handleSelectAll = useCallback(() => {
+        const range = getVisibleRange();
+        if (!range) return;
         hasUserSelectedRef.current = true;
+        setSelectionActive(true);
         setSelectionMode('cell');
         setExtraCells(new Set());
         setSelection({
-            startRow: firstVisibleRow,
-            startCol: firstVisibleCol,
-            endRow: lastVisibleRow,
-            endCol: lastVisibleCol,
+            startRow: range.firstVisibleRow,
+            startCol: range.firstVisibleCol,
+            endRow: range.lastVisibleRow,
+            endCol: range.lastVisibleCol,
         });
-        setAnchorCell({row: firstVisibleRow, col: firstVisibleCol});
-    }, [cols, rows, hiddenCols, hiddenRows]);
+        setAnchorCell({row: range.firstVisibleRow, col: range.firstVisibleCol});
+    }, [getVisibleRange]);
+
+    const handleCornerSelectAllAndCopy = useCallback(() => {
+        const range = getVisibleRange();
+        if (!range) return;
+        handleSelectAll();
+        void handleCopyAsImage({
+            minR: range.firstVisibleRow,
+            maxR: range.lastVisibleRow,
+            minC: range.firstVisibleCol,
+            maxC: range.lastVisibleCol,
+        });
+    }, [getVisibleRange, handleSelectAll, handleCopyAsImage]);
 
     const handleContextMenu = useCallback((row: number, col: number, e: React.MouseEvent) => {
         hasUserSelectedRef.current = true;
+        setSelectionActive(true);
         e.preventDefault();
         setSelectionMode('cell');
         if (!isInSelection(row, col)) {
@@ -981,6 +1272,7 @@ const Spreadsheet: React.FC<SpreadsheetProps> = ({
         e.preventDefault();
         if (editing) finishEdit(true);
         hasUserSelectedRef.current = true;
+        setSelectionActive(true);
         setSelectionMode('cell');
         setCopiedSelection(false);
 
@@ -1082,7 +1374,7 @@ const Spreadsheet: React.FC<SpreadsheetProps> = ({
 
         const tick = () => {
             const container = containerRef.current;
-            if (container) {
+            if (container && dragThresholdMetRef.current) {
                 const rect = container.getBoundingClientRect();
                 let scrolled = false;
 
@@ -1156,6 +1448,22 @@ const Spreadsheet: React.FC<SpreadsheetProps> = ({
         document.addEventListener('mousedown', handleOutsideMouseDown);
         return () => document.removeEventListener('mousedown', handleOutsideMouseDown);
     }, [copiedSelection]);
+
+    useEffect(() => {
+        const handleDeselectOutside = (e: MouseEvent) => {
+            if (!hasUserSelectedRef.current) return;
+            if (editing || isSelecting) return;
+            const root = wrapperRef.current;
+            if (root && root.contains(e.target as Node)) return;
+            hasUserSelectedRef.current = false;
+            setSelectionActive(false);
+            setExtraCells(new Set());
+            setAnchorCell(null);
+            setCopiedSelection(false);
+        };
+        document.addEventListener('mousedown', handleDeselectOutside);
+        return () => document.removeEventListener('mousedown', handleDeselectOutside);
+    }, [editing, isSelecting]);
 
     useEffect(() => {
         selectionModeRef.current = selectionMode;
@@ -1267,11 +1575,6 @@ const Spreadsheet: React.FC<SpreadsheetProps> = ({
                 handleCut();
                 return;
             }
-            if (isCtrl && e.key.toLowerCase() === 'v') {
-                e.preventDefault();
-                void handlePaste();
-                return;
-            }
             if (isCtrl && e.shiftKey && e.key.toLowerCase() === 'l') {
                 e.preventDefault();
                 applyStyleToSelection({align: 'left'});
@@ -1360,6 +1663,7 @@ const Spreadsheet: React.FC<SpreadsheetProps> = ({
                 setExtraCells(new Set());
                 setAnchorCell(null);
                 hasUserSelectedRef.current = false;
+                setSelectionActive(false);
                 return;
             }
             const arrowKeys = ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'];
@@ -1400,11 +1704,31 @@ const Spreadsheet: React.FC<SpreadsheetProps> = ({
                 }
             }
         };
+        const handlePasteEvent = (e: ClipboardEvent) => {
+            const pasteTarget = e.target as HTMLElement | null;
+            if (
+                pasteTarget &&
+                (pasteTarget.tagName === 'INPUT' ||
+                    pasteTarget.tagName === 'TEXTAREA' ||
+                    pasteTarget.isContentEditable)
+            ) {
+                return;
+            }
+            if (!hasUserSelectedRef.current) return;
+            const text = e.clipboardData?.getData('text/plain') ?? '';
+            if (!text) return;
+            e.preventDefault();
+            pasteFromText(text);
+        };
         document.addEventListener('keydown', handleKeyDown);
-        return () => document.removeEventListener('keydown', handleKeyDown);
+        document.addEventListener('paste', handlePasteEvent);
+        return () => {
+            document.removeEventListener('keydown', handleKeyDown);
+            document.removeEventListener('paste', handlePasteEvent);
+        };
     }, [handleUndo, handleRedo, applyStyleToSelection, getCellStyle, getSelectionRange,
         cells, pushHistory, editing, finishEdit, startEdit, selection, rows, cols,
-        handleCopy, handleCut, handlePaste, handleSelectAll]);
+        handleCopy, handleCut, pasteFromText, handleSelectAll]);
 
     const handleFindReplace = useCallback((findText: string, replaceText: string, mode: 'find' | 'replace' | 'replaceAll') => {
         if (!findText) return 0;
@@ -1467,7 +1791,7 @@ const Spreadsheet: React.FC<SpreadsheetProps> = ({
         }
     }
 
-    const renderCellContent = (row: number, col: number) => {
+    const renderCellContent = (row: number, col: number, extraShadow?: string) => {
         const cell = getCell(row, col);
         const style = cell?.style || {};
         const value = cell?.value || '';
@@ -1488,6 +1812,7 @@ const Spreadsheet: React.FC<SpreadsheetProps> = ({
                     color: style.color || '#000',
                     backgroundColor: style.bgColor || 'transparent',
                     lineHeight: style.lineHeight ? `${style.lineHeight}px` : 'normal',
+                    boxShadow: extraShadow,
                 }}
             >
           <span
@@ -1501,6 +1826,7 @@ const Spreadsheet: React.FC<SpreadsheetProps> = ({
 
     const renderCell = (row: number, col: number, options?: { isFrozen?: boolean; frozenTop?: number }) => {
         const merge = isInMerge(merges, row, col);
+        const mergeEff = merge ? effectiveMergeOrigin(merge, hiddenCols, hiddenRows) : null;
         if (merge && !isMergeOrigin(merge, row, col)) return null;
 
         const selected = isInSelection(row, col);
@@ -1525,12 +1851,25 @@ const Spreadsheet: React.FC<SpreadsheetProps> = ({
         }
 
         const {minR, maxR, minC, maxC} = getSelectionRange();
+        const visBottom = merge ? merge.row + merge.rowSpan - 1 : row;
+        const visRight = merge ? merge.col + merge.colSpan - 1 : col;
         const isTopEdge = row === minR;
-        const isBottomEdge = row === maxR;
+        const isBottomEdge = visBottom === maxR;
         const isLeftEdge = col === minC;
-        const isRightEdge = col === maxC;
+        const isRightEdge = visRight === maxC;
         const borderColor = '#3b82f6';
         const borderWidth = 2;
+        const inCrossRow = row >= minR && row <= maxR;
+        const inCrossCol = col >= minC && col <= maxC;
+        const cellShadows: string[] = [];
+        if (col === frozenCount - 1) cellShadows.push('2px 0 4px rgba(0,0,0,0.08)');
+        const selShadows: string[] = [];
+        if (selected && selectionActive && !colHidden && !rowHidden && !copiedSelection) {
+            if (isTopEdge) selShadows.push(`inset 0 2px 0 0 ${borderColor}`);
+            if (isBottomEdge) selShadows.push(`inset 0 -2px 0 0 ${borderColor}`);
+            if (isLeftEdge) selShadows.push(`inset 2px 0 0 0 ${borderColor}`);
+            if (isRightEdge) selShadows.push(`inset -2px 0 0 0 ${borderColor}`);
+        }
 
         return (
             <td
@@ -1538,43 +1877,36 @@ const Spreadsheet: React.FC<SpreadsheetProps> = ({
                 {...tdProps}
                 className={cn(
                     'border-r border-b border-gray-200 p-0',
-                    selected && !colHidden && !rowHidden && 'bg-blue-50/60',
                     isActive && 'z-10',
                     row < frozenRows && 'bg-gray-50',
-                    col < frozenCols && 'bg-gray-50 sticky z-20',
+                    col < frozenCount && 'bg-white sticky z-20',
                     (colHidden || rowHidden) && 'border-0',
                     row >= rows - bottomFrozenRows && 'sticky bottom-0 z-[5] bg-blue-50',
-                    row >= rows - bottomFrozenRows && col < frozenCols && 'z-[25]',
+                    row >= rows - bottomFrozenRows && col < frozenCount && 'z-[25]',
                     options?.isFrozen && 'sticky z-[22]',
-                    options?.isFrozen && col < frozenCols && 'z-[28]',
+                    options?.isFrozen && col < frozenCount && 'z-[28]',
+                    selectionActive && !colHidden && !rowHidden && (selected || inCrossRow || inCrossCol) && 'bg-blue-50',
                 )}
                 style={{
                     ...cellStyle,
-                    position: (col < frozenCols || row >= rows - bottomFrozenRows || options?.isFrozen) ? 'sticky' : (isActive ? 'relative' : undefined),
-                    ...(options?.isFrozen && options?.frozenTop !== undefined ? {top: options.frozenTop} : {}),
-                    ...(col < frozenCols ? {left: frozenColLefts[col]} : {}),
-                    ...(col === frozenCols - 1 ? {boxShadow: '2px 0 4px rgba(0,0,0,0.08)'} : {}),
-                    ...(selected ? (copiedSelection ? {
+                    position: (col < frozenCount || row >= rows - bottomFrozenRows || options?.isFrozen) ? 'sticky' : (isActive ? 'relative' : undefined),
+                    ...(options?.isFrozen && options.frozenTop !== undefined ? {top: options.frozenTop} : {}),
+                    ...(col < frozenCount ? {left: frozenColLefts[col]} : {}),
+                    ...(cellShadows.length > 0 ? {boxShadow: cellShadows.join(', ')} : {}),
+                    ...(selected && copiedSelection ? {
                         borderTop: isTopEdge ? `2px dashed ${borderColor}` : undefined,
                         borderBottom: isBottomEdge ? `2px dashed ${borderColor}` : undefined,
                         borderLeft: isLeftEdge ? `2px dashed ${borderColor}` : undefined,
                         borderRight: isRightEdge ? `2px dashed ${borderColor}` : undefined,
-                    } : {
-                        boxShadow: [
-                            isTopEdge ? `inset 0 2px 0 0 ${borderColor}` : '',
-                            isBottomEdge ? `inset 0 -2px 0 0 ${borderColor}` : '',
-                            isLeftEdge ? `inset 2px 0 0 0 ${borderColor}` : '',
-                            isRightEdge ? `inset -2px 0 0 0 ${borderColor}` : '',
-                        ].filter(Boolean).join(', ') || undefined,
-                    }) : {}),
+                    } : {}),
                 }}
                 data-row={row}
                 data-col={col}
                 onMouseDown={(e) => handleCellMouseDown(row, col, e)}
-                onDoubleClick={() => startEdit(row, col)}
+                onDoubleClick={() => (onCellDoubleClick ? onCellDoubleClick(row, col) : startEdit(row, col))}
                 onContextMenu={(e) => handleContextMenu(row, col, e)}
             >
-                {(!colHidden && !rowHidden) && (isEditing ? (
+                {(merge ? mergeEff !== null : (!colHidden && !rowHidden)) && (isEditing ? (
                     <input
                         ref={editInputRef}
                         value={editValue}
@@ -1587,7 +1919,7 @@ const Spreadsheet: React.FC<SpreadsheetProps> = ({
                         }}
                     />
                 ) : (
-                    renderCellContent(row, col)
+                    renderCellContent(row, col, selShadows.length > 0 ? selShadows.join(', ') : undefined)
                 ))}
 
             </td>
@@ -1601,16 +1933,18 @@ const Spreadsheet: React.FC<SpreadsheetProps> = ({
             if (cell) cells.push(cell);
         }
         const isRowHidden = hiddenRows.has(rowIndex);
+        const {minR: sMinR, maxR: sMaxR} = getSelectionRange();
+        const rowHighlighted = selectionActive && !isRowHidden && rowIndex >= sMinR && rowIndex <= sMaxR;
         return (
             <tr key={rowIndex} style={isRowHidden ? {display: 'none'} : undefined}>
                 <th
                     className={cn(
-                        'sticky left-0 z-30 border-r border-b border-gray-200 bg-gray-100 text-center text-xs font-normal text-gray-600 select-none',
+                        'sticky left-0 z-30 border-r border-b border-gray-200 bg-gray-50 text-center text-xs font-normal text-gray-600 select-none',
                         !isRowHidden && 'cursor-pointer hover:bg-gray-200',
                         isRowHidden && 'border-0',
-                        !isRowHidden && (hiddenRowGroups.some((g) => g.start === rowIndex + 1) || hiddenRowGroups.some((g) => g.start === 0 && g.end === rowIndex - 1)) && 'z-40',
-                        rowIndex >= rows - bottomFrozenRows && 'bottom-0 z-[28]',
-                        options?.isFrozen && 'z-[38]',
+                        rowIndex >= rows - bottomFrozenRows && 'bottom-0 z-[32]',
+                        options?.isFrozen && 'z-[45]',
+                        !isRowHidden && (hiddenRowGroups.some((g) => g.start === rowIndex + 1) || hiddenRowGroups.some((g) => g.start === 0 && g.end === rowIndex - 1)) && 'z-50',
                     )}
                     style={{
                         height: isRowHidden ? 0 : rowHeights[rowIndex],
@@ -1618,9 +1952,12 @@ const Spreadsheet: React.FC<SpreadsheetProps> = ({
                         minWidth: ROW_HEADER_WIDTH,
                         ...(options?.isFrozen && options?.frozenTop !== undefined ? {
                             top: options.frozenTop,
-                            position: 'sticky'
+                            position: 'sticky' as const,
+                            backgroundColor: '#f9fafb'
                         } : {}),
+                        ...(rowHighlighted ? {backgroundColor: '#dbeafe', color: '#1d4ed8'} : {}),
                     }}
+                    {...(options?.isFrozen ? {'data-dual-sticky': 'true'} : {})}
                     onMouseDown={(e) => !isRowHidden && handleRowHeaderMouseDown(rowIndex, e)}
                     onMouseEnter={() => !isRowHidden && handleRowHeaderMouseEnter(rowIndex)}
                     onContextMenu={(e) => !isRowHidden && handleHeaderContextMenu(e, 'row', rowIndex)}
@@ -1629,8 +1966,8 @@ const Spreadsheet: React.FC<SpreadsheetProps> = ({
                     {!isRowHidden && rowIndex + 1}
                     {!isRowHidden && hiddenRowGroups.some((g) => g.start === rowIndex + 1) && (
                         <div
-                            className="absolute left-0 right-0 z-40 flex cursor-pointer items-center justify-center bg-slate-400 hover:bg-slate-500"
-                            style={{bottom: '-6px', height: '12px'}}
+                            className="absolute left-0 right-0 bottom-0 z-40 flex cursor-pointer items-center justify-center bg-slate-400 hover:bg-slate-500"
+                            style={{height: '10px'}}
                             onMouseDown={(e) => e.stopPropagation()}
                             onClick={(e) => {
                                 e.stopPropagation();
@@ -1643,8 +1980,8 @@ const Spreadsheet: React.FC<SpreadsheetProps> = ({
                     )}
                     {!isRowHidden && hiddenRowGroups.some((g) => g.start === 0 && g.end === rowIndex - 1) && (
                         <div
-                            className="absolute left-0 right-0 z-40 flex cursor-pointer items-center justify-center bg-slate-400 hover:bg-slate-500"
-                            style={{top: '-6px', height: '12px'}}
+                            className="absolute left-0 right-0 top-0 z-40 flex cursor-pointer items-center justify-center bg-slate-400 hover:bg-slate-500"
+                            style={{height: '10px'}}
                             onMouseDown={(e) => e.stopPropagation()}
                             onClick={(e) => {
                                 e.stopPropagation();
@@ -1902,112 +2239,181 @@ const Spreadsheet: React.FC<SpreadsheetProps> = ({
                 )}
 
                 {/* Spreadsheet grid */}
-                <div
-                    ref={containerRef}
-                    className="relative overflow-auto select-none"
-                    style={{maxHeight: '65vh', zoom: `${zoom}%`, overflowAnchor: 'none'}}
-                >
-                    <table style={{tableLayout: 'fixed', borderCollapse: 'separate', borderSpacing: 0}}>
-                        <colgroup>
-                            <col style={{width: ROW_HEADER_WIDTH}}/>
-                            {colWidths.map((w, i) => (
-                                <col key={i} style={{width: hiddenCols.has(i) ? 0 : w}}/>
-                            ))}
-                        </colgroup>
-                        <thead>
-                        <tr style={{height: COL_HEADER_HEIGHT}}>
-                            <th className="sticky left-0 top-0 z-30 border-r border-b border-gray-200 bg-gray-100 text-xs font-normal text-gray-600"
-                                style={{width: ROW_HEADER_WIDTH, minWidth: ROW_HEADER_WIDTH}}>
-                            </th>
-                            {Array.from({length: cols}, (_, i) => {
-                                const isColHidden = hiddenCols.has(i);
-                                const showRightIndicator = !isColHidden && hiddenColGroups.some((g) => g.start === i + 1);
-                                const showLeftIndicator = !isColHidden && hiddenColGroups.some((g) => g.start === 0 && g.end === i - 1);
-                                return (
-                                    <th
-                                        key={i}
-                                        className={cn(
-                                            'sticky top-0 border-r border-b border-gray-200 bg-gray-100 text-center text-xs font-normal text-gray-600 select-none',
-                                            !isColHidden && 'cursor-pointer hover:bg-gray-200',
-                                            isColHidden && 'border-0',
-                                            (showRightIndicator || showLeftIndicator) && 'z-10',
-                                            i < frozenCols ? 'z-[35]' : 'z-20',
-                                        )}
-                                        style={{
-                                            width: isColHidden ? 0 : colWidths[i],
-                                            minWidth: isColHidden ? 0 : colWidths[i],
-                                            ...(i < frozenCols ? {left: frozenColLefts[i]} : {}),
-                                            ...(i === frozenCols - 1 ? {boxShadow: '2px 0 4px rgba(0,0,0,0.08)'} : {}),
-                                        }}
-                                        onMouseDown={(e) => !isColHidden && handleColHeaderMouseDown(i, e)}
-                                        onMouseEnter={() => !isColHidden && handleColHeaderMouseEnter(i)}
-                                        onContextMenu={(e) => !isColHidden && handleHeaderContextMenu(e, 'col', i)}
-                                        title={isColHidden ? '' : colIndexToLetter(i)}
-                                    >
-                                        {!isColHidden && colIndexToLetter(i)}
-                                        {!isColHidden && (
-                                            <div
-                                                className="absolute top-0 right-0 bottom-0 z-30 cursor-col-resize hover:bg-primary/30"
-                                                style={{width: '5px'}}
-                                                onMouseDown={(e) => {
-                                                    e.stopPropagation();
-                                                    e.preventDefault();
-                                                    colResizeRef.current = {
-                                                        col: i,
-                                                        startX: e.clientX,
-                                                        startWidth: colWidths[i]
-                                                    };
-                                                    document.body.style.cursor = 'col-resize';
-                                                    document.body.style.userSelect = 'none';
-                                                }}
-                                            />
-                                        )}
-                                        {showRightIndicator && (
-                                            <div
-                                                className="absolute top-0 bottom-0 z-40 flex cursor-pointer items-center justify-center bg-slate-400 hover:bg-slate-500"
-                                                style={{right: '-6px', width: '12px'}}
-                                                onMouseDown={(e) => e.stopPropagation()}
-                                                onClick={(e) => {
-                                                    e.stopPropagation();
-                                                    handleUnhideCol(i + 1);
-                                                }}
-                                                title="取消隐藏"
-                                            >
-                                                <ChevronsLeftRight size={8} className="text-white"/>
-                                            </div>
-                                        )}
-                                        {showLeftIndicator && (
-                                            <div
-                                                className="absolute top-0 bottom-0 z-40 flex cursor-pointer items-center justify-center bg-slate-400 hover:bg-slate-500"
-                                                style={{left: '-6px', width: '12px'}}
-                                                onMouseDown={(e) => e.stopPropagation()}
-                                                onClick={(e) => {
-                                                    e.stopPropagation();
-                                                    handleUnhideCol(0);
-                                                }}
-                                                title="取消隐藏"
-                                            >
-                                                <ChevronsLeftRight size={8} className="text-white"/>
-                                            </div>
-                                        )}
-                                    </th>
-                                );
-                            })}
-                        </tr>
-                        </thead>
-                        <tbody>
-                        {frozenRows > 0 && (
-                            Array.from({length: frozenRows}, (_, i) => renderRow(i, {
-                                isFrozen: true,
-                                frozenTop: frozenRowTops[i] + COL_HEADER_HEIGHT
-                            }))
-                        )}
-                        {Array.from({length: rows - frozenRows - bottomFrozenRows}, (_, i) => renderRow(frozenRows + i))}
-                        {bottomFrozenRows > 0 && (
-                            Array.from({length: bottomFrozenRows}, (_, i) => renderRow(rows - bottomFrozenRows + i))
-                        )}
-                        </tbody>
-                    </table>
+                <div className="relative">
+                    <div
+                        ref={containerRef}
+                        className="relative overflow-auto select-none"
+                        style={{maxHeight: '65vh', zoom: `${zoom}%`, overflowAnchor: 'none'}}
+                    >
+                        <table style={{tableLayout: 'fixed', borderCollapse: 'separate', borderSpacing: 0}}>
+                            <colgroup>
+                                <col style={{width: ROW_HEADER_WIDTH}}/>
+                                {colWidths.map((w, i) => (
+                                    <col key={i} style={{width: hiddenCols.has(i) ? 0 : w}}/>
+                                ))}
+                            </colgroup>
+                            <thead>
+                            <tr style={{height: COL_HEADER_HEIGHT}}>
+                                <th className="sticky left-0 top-0 z-[45] border-r border-b border-gray-200 bg-gray-50 text-xs font-normal text-gray-600 relative cursor-pointer hover:bg-gray-200"
+                                    data-dual-sticky="true"
+                                    style={{width: ROW_HEADER_WIDTH, minWidth: ROW_HEADER_WIDTH}}
+                                    onClick={handleCornerSelectAllAndCopy}
+                                    title={isMobile ? '保存图片到相册' : '全选可见单元格并复制为图片'}
+                                    aria-label={isMobile ? '保存图片' : '复制图片'}
+                                >
+                                    {isMobile ? (
+                                        <span className="text-[9px] leading-none text-gray-600">保存图片</span>
+                                    ) : (
+                                        <svg className="absolute bottom-0 right-0 h-2.5 w-2.5 text-gray-400"
+                                             viewBox="0 0 10 10" fill="currentColor" aria-hidden>
+                                            <path d="M10 0v10H0z"/>
+                                        </svg>
+                                    )}
+                                </th>
+                                {Array.from({length: cols}, (_, i) => {
+                                    const isColHidden = hiddenCols.has(i);
+                                    const {minC: sMinC, maxC: sMaxC} = getSelectionRange();
+                                    const colHighlighted = selectionActive && !isColHidden && i >= sMinC && i <= sMaxC;
+                                    const headShadows: string[] = [];
+                                    if (i === frozenCount - 1) headShadows.push('2px 0 4px rgba(0,0,0,0.08)');
+                                    const showRightIndicator = !isColHidden && hiddenColGroups.some((g) => g.start === i + 1);
+                                    const showLeftIndicator = !isColHidden && hiddenColGroups.some((g) => g.start === 0 && g.end === i - 1);
+                                    return (
+                                        <th
+                                            key={i}
+                                            className={cn(
+                                                'sticky top-0 border-r border-b border-gray-200 bg-gray-50 text-center text-xs font-normal text-gray-600 select-none',
+                                                !isColHidden && 'cursor-pointer hover:bg-gray-200',
+                                                isColHidden && 'border-0',
+                                                i < frozenCount ? 'z-[35]' : 'z-20',
+                                                (showRightIndicator || showLeftIndicator) && 'z-40',
+                                                colHighlighted && 'bg-blue-100 text-blue-700',
+                                            )}
+                                            style={{
+                                                width: isColHidden ? 0 : colWidths[i],
+                                                minWidth: isColHidden ? 0 : colWidths[i],
+                                                ...(i < frozenCount ? {left: frozenColLefts[i]} : {}),
+                                                ...(colHighlighted
+                                                    ? {backgroundColor: '#dbeafe', color: '#1d4ed8'}
+                                                    : i < frozenCount ? {backgroundColor: '#f9fafb'} : {}),
+                                                ...(headShadows.length > 0 ? {boxShadow: headShadows.join(', ')} : {}),
+                                            }}
+                                            {...(i < frozenCount ? {'data-dual-sticky': 'true'} : {})}
+                                            onMouseDown={(e) => !isColHidden && handleColHeaderMouseDown(i, e)}
+                                            onMouseEnter={() => !isColHidden && handleColHeaderMouseEnter(i)}
+                                            onContextMenu={(e) => !isColHidden && handleHeaderContextMenu(e, 'col', i)}
+                                            title={isColHidden ? '' : colIndexToLetter(i)}
+                                        >
+                                            {!isColHidden && colIndexToLetter(i)}
+                                            {!isColHidden && (
+                                                <div
+                                                    className="absolute top-0 right-0 bottom-0 z-30 cursor-col-resize hover:bg-primary/30"
+                                                    style={{width: '5px'}}
+                                                    onMouseDown={(e) => {
+                                                        e.stopPropagation();
+                                                        e.preventDefault();
+                                                        colResizeRef.current = {
+                                                            col: i,
+                                                            startX: e.clientX,
+                                                            startWidth: colWidths[i]
+                                                        };
+                                                        document.body.style.cursor = 'col-resize';
+                                                        document.body.style.userSelect = 'none';
+                                                    }}
+                                                    onDoubleClick={(e) => {
+                                                        e.stopPropagation();
+                                                        e.preventDefault();
+                                                        handleColumnAutoFit(i);
+                                                    }}
+                                                />
+                                            )}
+                                            {showRightIndicator && (
+                                                <div
+                                                    className="absolute top-0 bottom-0 right-0 z-40 flex cursor-pointer items-center justify-center bg-slate-400 hover:bg-slate-500"
+                                                    style={{width: '10px'}}
+                                                    onMouseDown={(e) => e.stopPropagation()}
+                                                    onClick={(e) => {
+                                                        e.stopPropagation();
+                                                        handleUnhideCol(i + 1);
+                                                    }}
+                                                    title="取消隐藏"
+                                                >
+                                                    <ChevronsLeftRight size={8} className="text-white"/>
+                                                </div>
+                                            )}
+                                            {showLeftIndicator && (
+                                                <div
+                                                    className="absolute top-0 bottom-0 left-0 z-40 flex cursor-pointer items-center justify-center bg-slate-400 hover:bg-slate-500"
+                                                    style={{width: '10px'}}
+                                                    onMouseDown={(e) => e.stopPropagation()}
+                                                    onClick={(e) => {
+                                                        e.stopPropagation();
+                                                        handleUnhideCol(0);
+                                                    }}
+                                                    title="取消隐藏"
+                                                >
+                                                    <ChevronsLeftRight size={8} className="text-white"/>
+                                                </div>
+                                            )}
+                                        </th>
+                                    );
+                                })}
+                            </tr>
+                            </thead>
+                            <tbody>
+                            {frozenRows > 0 && (
+                                Array.from({length: frozenRows}, (_, i) => renderRow(i, {
+                                    isFrozen: true,
+                                    frozenTop: frozenRowTops[i] + COL_HEADER_HEIGHT
+                                }))
+                            )}
+                            {Array.from({length: rows - frozenRows - bottomFrozenRows}, (_, i) => renderRow(frozenRows + i))}
+                            {bottomFrozenRows > 0 && (
+                                Array.from({length: bottomFrozenRows}, (_, i) => renderRow(rows - bottomFrozenRows + i))
+                            )}
+                            </tbody>
+                        </table>
+                    </div>
+                    {freezeKey !== undefined && (
+                        <div
+                            className="pointer-events-none absolute top-0 bottom-0 z-[46] w-2"
+                            style={{left: frozenEdge * (zoom / 100) - 4}}
+                        >
+                            <div
+                                className={cn(
+                                    'absolute top-0 bottom-0 left-1/2 -translate-x-1/2 w-0.5 transition-colors',
+                                    freezeDragging || freezeDividerHover ? 'bg-blue-500' : 'bg-transparent',
+                                )}
+                            />
+                            <div
+                                className="pointer-events-auto absolute left-0 right-0 bottom-0 cursor-grab active:cursor-grabbing"
+                                style={{top: COL_HEADER_HEIGHT * (zoom / 100)}}
+                                onMouseDown={startFreezeDrag}
+                                onMouseEnter={() => setFreezeDividerHover(true)}
+                                onMouseMove={handleFreezeHoverMove}
+                                onMouseLeave={() => {
+                                    setFreezeDividerHover(false);
+                                    if (!freezeDragging) setFreezePillY(null);
+                                }}
+                            >
+                                {(freezeDividerHover || freezeDragging) && (
+                                    <>
+                                        <div
+                                            className="pointer-events-none absolute left-1/2 -translate-x-1/2 w-1.5 rounded-full bg-blue-500 shadow-sm"
+                                            style={{top: freezePillY ?? 4, height: 36}}
+                                        />
+                                        <div
+                                            className="pointer-events-none absolute left-4 z-[70] whitespace-nowrap rounded-md bg-gray-800 px-2.5 py-1.5 text-xs text-white shadow-lg"
+                                            style={{top: (freezePillY ?? 4) + 10}}
+                                        >
+                                            <span className="absolute -left-1 top-3 h-2 w-2 rotate-45 bg-gray-800"/>
+                                            可拖拽调整冻结区域
+                                        </div>
+                                    </>
+                                )}
+                            </div>
+                        </div>
+                    )}
                 </div>
 
                 {/* Bottom bar */}
@@ -2030,6 +2436,11 @@ const Spreadsheet: React.FC<SpreadsheetProps> = ({
                                 <span className="truncate">
                 计数：<span className="font-mono font-medium text-gray-800">{selectionStats.count}</span>
               </span>
+                                {(selectionStats.hiddenColsInRange > 0 || selectionStats.hiddenRowsInRange > 0) && (
+                                    <span className="truncate text-gray-500">
+                  含{selectionStats.hiddenColsInRange > 0 ? ` ${selectionStats.hiddenColsInRange} 隐藏列` : ''}{selectionStats.hiddenColsInRange > 0 && selectionStats.hiddenRowsInRange > 0 ? '、' : ''}{selectionStats.hiddenRowsInRange > 0 ? ` ${selectionStats.hiddenRowsInRange} 隐藏行` : ''}
+                </span>
+                                )}
                             </>
                         )}
                     </div>
@@ -2089,6 +2500,35 @@ const Spreadsheet: React.FC<SpreadsheetProps> = ({
                     onClose={() => setFindReplaceOpen(false)}
                     onFindReplace={handleFindReplace}
                 />
+
+                <Dialog
+                    open={previewImage !== null}
+                    onOpenChange={(open: boolean) => {
+                        if (!open) setPreviewImage(null);
+                    }}
+                >
+                    <DialogContent className="max-w-[92vw] sm:max-w-lg">
+                        <DialogHeader>
+                            <DialogTitle>保存图片</DialogTitle>
+                        </DialogHeader>
+                        <p className="text-xs text-muted-foreground">
+                            图片已开始下载，可在下载目录或相册中查看。若浏览器拦截了下载，请长按下方图片选择「保存到相册」。
+                        </p>
+                        {previewImage && (
+                            <div className="max-h-[60vh] overflow-auto rounded border border-border bg-white">
+                                <Image
+                                    src={previewImage.url}
+                                    alt={`报表图片 ${previewImage.name}`}
+                                    className="max-h-[60vh] w-auto"
+                                    style={{maxWidth: 'none'}}
+                                />
+                            </div>
+                        )}
+                        {previewImage && (
+                            <p className="truncate text-xs text-muted-foreground">{previewImage.name}</p>
+                        )}
+                    </DialogContent>
+                </Dialog>
 
                 {contextMenu && (
                     <ContextMenu

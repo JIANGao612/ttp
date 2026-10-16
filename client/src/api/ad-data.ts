@@ -1,55 +1,4 @@
-import {apiClient} from '@client/src/utils/axios';
-
-apiClient.defaults.timeout = 120000;
-
-apiClient.interceptors.response.use(
-    (response) => {
-        if (response.status === 403) {
-            throw new Error('您没有该操作的权限，请联系管理员');
-        }
-        return response;
-    },
-    (error) => {
-        if (error.response?.status === 403) {
-            throw new Error('您没有该操作的权限，请联系管理员');
-        }
-        return Promise.reject(error);
-    },
-);
-
-const responseCache = new Map<string, { data: unknown; ts: number }>();
-const CACHE_TTL_MS = 5 * 60 * 1000;
-
-// 导出类请求需全量聚合外部大表（百万行级），耗时可达分钟级，单独放宽超时
-export const EXPORT_TIMEOUT_MS = 5 * 60 * 1000;
-
-function cachedGet<T>(url: string): Promise<{ data: T }> {
-    const now = Date.now();
-    const cached = responseCache.get(url);
-    if (cached && now - cached.ts < CACHE_TTL_MS) {
-        return Promise.resolve({data: cached.data as T});
-    }
-    return apiClient.get<T>(url).then((res) => {
-        responseCache.set(url, {data: res.data, ts: now});
-        return res;
-    });
-}
-
-const paramsSerializer = {
-    serialize: (p: Record<string, unknown>) => {
-        const sp = new URLSearchParams();
-        Object.entries(p).forEach(([key, value]) => {
-            if (value === undefined || value === null) return;
-            if (Array.isArray(value)) {
-                value.forEach((v) => sp.append(key, String(v)));
-            } else {
-                sp.append(key, String(value));
-            }
-        });
-        return sp.toString();
-    },
-};
-
+import {apiClient} from '@/utils/axios';
 import type {
     AdDataListParams,
     AdDataListResponse,
@@ -101,7 +50,44 @@ import type {
     MonthlyTierParams,
     MonthlyDistributionResponse,
     MonthlyDistributionParams,
+    CountryMaterialDetailResponse,
+    CountryMaterialDetailRequest,
 } from '@shared/api.interface';
+
+const responseCache = new Map<string, { data: unknown; ts: number }>();
+const CACHE_TTL_MS = 5 * 60 * 1000;
+
+// 导出类请求需全量聚合外部大表（百万行级），耗时可达分钟级，单独放宽超时
+export const EXPORT_TIMEOUT_MS = 5 * 60 * 1000;
+
+// 带缓存 GET（无参数的只读接口用）
+function cachedGet<T>(url: string): Promise<{ data: T }> {
+    const now = Date.now();
+    const cached = responseCache.get(url);
+    if (cached && now - cached.ts < CACHE_TTL_MS) {
+        return Promise.resolve({data: cached.data as T});
+    }
+    return apiClient.get<T>(url).then((res) => {
+        responseCache.set(url, {data: res.data, ts: now});
+        return res;
+    });
+}
+
+// 数组/字符串参数序列化（axios 1.x 的 { serialize: fn } 形式）
+const paramsSerializer = {
+    serialize: (p: Record<string, unknown>) => {
+        const sp = new URLSearchParams();
+        Object.entries(p).forEach(([key, value]) => {
+            if (value === undefined || value === null) return;
+            if (Array.isArray(value)) {
+                value.forEach((v) => sp.append(key, String(v)));
+            } else {
+                sp.append(key, String(value));
+            }
+        });
+        return sp.toString();
+    },
+};
 
 export const getSummary = (params: AdDataFilterParams) =>
     apiClient.get<SummaryData>('/ad-data/summary', {params, paramsSerializer});
@@ -109,7 +95,7 @@ export const getSummary = (params: AdDataFilterParams) =>
 export const getTrend = (params: AdDataFilterParams) =>
     apiClient.get<TrendResponse>('/ad-data/trend', {params, paramsSerializer});
 
-export const  getAdDataList = (params: AdDataListParams) =>
+export const getAdDataList = (params: AdDataListParams) =>
     apiClient.get<AdDataListResponse>('/ad-data/list', {params, paramsSerializer});
 
 export const getCountryReport = (params: AdDataFilterParams) =>
@@ -118,10 +104,10 @@ export const getCountryReport = (params: AdDataFilterParams) =>
         {params, paramsSerializer},
     );
 
-export const getDailyBaseline = (startDate: string, endDate: string) =>
+export const getDailyBaseline = (startDate: string, endDate: string, group?: string[]) =>
     apiClient.get<DailyBaselineResponse>(
         '/ad-data/report/daily-baseline',
-        {params: {startDate, endDate}},
+        {params: {startDate, endDate, group}, paramsSerializer},
     );
 
 export const getMaterialTypeReport = (params: AdDataFilterParams) =>
@@ -158,7 +144,11 @@ export const getFilterOptions = () =>
     cachedGet<FilterOptions>('/ad-data/filter-options');
 
 export const exportData = (params: ExportParams) =>
-    apiClient.get<ExportResponse>('/ad-data/export', {params, paramsSerializer, timeout: EXPORT_TIMEOUT_MS});
+    apiClient.get<ExportResponse>('/ad-data/export', {
+        params,
+        paramsSerializer,
+        timeout: EXPORT_TIMEOUT_MS,
+    });
 
 export const getLastUpdated = () =>
     cachedGet<LastUpdatedResponse>('/ad-data/last-updated');
@@ -291,6 +281,7 @@ export const getMemberDailyCost = (params: {
     endDate?: string;
     groupFilter?: string;
     countries?: string;
+    memberNames?: string;
 }) =>
     apiClient.get<MemberDailyCostResponse>('/member-daily-cost/list', {params});
 
@@ -302,3 +293,9 @@ export const getLatestDataDate = () =>
 
 export const getCctLatestDataDate = () =>
     apiClient.get<{ latestDataDate: string }>('/creative-consumption-total/latest-data-date');
+
+export const getCountryMaterialDetail = (params: CountryMaterialDetailRequest) =>
+    apiClient.get<CountryMaterialDetailResponse>(
+        '/ad-data/report/country-material-detail',
+        {params, paramsSerializer},
+    );

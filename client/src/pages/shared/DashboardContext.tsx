@@ -1,4 +1,4 @@
-import React, {createContext, useContext, useCallback, useState, useEffect} from 'react';
+import React, {createContext, useContext, useCallback, useState, useEffect, useSyncExternalStore} from 'react';
 import {Outlet, useLocation} from 'react-router-dom';
 import type {AdDataFilterParams} from '@shared/api.interface';
 import {getDefaultFilters} from './default-date-range';
@@ -23,11 +23,13 @@ const DashboardContextInner: React.FC<{ routeKey: string }> = ({routeKey}) => {
         `dashboard-${routeKey}`,
         'filters',
         getDefaultFilters(),
+        true,
     );
     const [exportExtra, setExportExtra] = usePersistedState<Record<string, unknown>>(
         `dashboard-${routeKey}`,
         'exportExtra',
         {},
+        true,
     );
 
     const handleSetFilters = useCallback((next: AdDataFilterParams) => {
@@ -70,12 +72,43 @@ export const DashboardProvider: React.FC = () => {
     return <DashboardContextInner key={routeKey} routeKey={routeKey}/>;
 };
 
+interface FallbackStore {
+    filters: AdDataFilterParams;
+    exportExtra: Record<string, unknown>;
+    exportHandler: ExportHandler | null;
+}
+
+let fallbackStore: FallbackStore = {
+    filters: getDefaultFilters(),
+    exportExtra: {},
+    exportHandler: null,
+};
+const fallbackListeners = new Set<() => void>();
+
+const subscribeFallback = (listener: () => void): (() => void) => {
+    fallbackListeners.add(listener);
+    return () => {
+        fallbackListeners.delete(listener);
+    };
+};
+const getFallbackSnapshot = (): FallbackStore => fallbackStore;
+const patchFallback = (patch: Partial<FallbackStore>): void => {
+    fallbackStore = {...fallbackStore, ...patch};
+    fallbackListeners.forEach((listener) => listener());
+};
+
 export function useDashboard(): DashboardContextValue {
     const ctx = useContext(DashboardContext);
-    if (!ctx) {
-        throw new Error('useDashboard must be used within DashboardProvider');
-    }
-    return ctx;
+    const fallback = useSyncExternalStore(subscribeFallback, getFallbackSnapshot);
+    if (ctx) return ctx;
+    return {
+        filters: fallback.filters,
+        setFilters: (filters: AdDataFilterParams) => patchFallback({filters}),
+        exportExtra: fallback.exportExtra,
+        setExportExtra: (exportExtra: Record<string, unknown>) => patchFallback({exportExtra}),
+        exportHandler: fallback.exportHandler,
+        setExportHandler: (exportHandler: ExportHandler | null) => patchFallback({exportHandler}),
+    };
 }
 
 export function useRegisterExport(handler: ExportHandler | null): void {

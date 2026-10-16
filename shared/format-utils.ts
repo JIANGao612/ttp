@@ -1,3 +1,18 @@
+export function formatSpend(v: number | string | null | undefined): string {
+    if (v === null || v === undefined || v === '') return '';
+    const num = Number(v);
+    if (Number.isNaN(num)) return '-';
+    return num.toFixed(2);
+}
+
+export function fmtCost2(v: number | null | undefined): string {
+    if (v === null || v === undefined || Number.isNaN(v)) return '—';
+    return Number(v.toFixed(2)).toLocaleString('en-US', {
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2,
+    });
+}
+
 export function fmtInt(v: number | null | undefined): string {
     if (v === null || v === undefined || Number.isNaN(v)) return '—';
     return Math.round(v).toLocaleString('en-US');

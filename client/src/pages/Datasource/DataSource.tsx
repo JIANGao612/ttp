@@ -1,12 +1,18 @@
 import React, {useState, useEffect, useRef} from 'react';
 import {RefreshCw} from 'lucide-react';
 import {toast} from 'sonner';
+import {TableWithSelection} from '@client/src/components/table-selection';
 import DashboardHeader from '../shared/DashboardHeader';
 import DashboardToolbar from '../shared/DashboardToolbar';
 import {useDashboard} from '../shared/DashboardContext';
 import {SourceTable} from '../shared/report-tables';
 import {getDefaultDateRange} from '../shared/default-date-range';
+import {DATA_SOURCE_KEYWORD_FIELD_OPTIONS} from '@shared/source-columns';
 import {backfillIdentityId, getBackfillStatus} from '@client/src/api/creative-asset-registry';
+
+const SOURCE_PRIMARY_FIELDS: string[] = [
+    'investTime', 'keyword', 'keywordFields', 'agent', 'materialType', 'materialDirection', 'country', 'newOrActive', 'group',
+];
 
 const DataSource: React.FC = () => {
     const {filters, setFilters} = useDashboard();
@@ -65,8 +71,10 @@ const DataSource: React.FC = () => {
     };
 
     return (
-        <div key={refreshKey} className="flex flex-col gap-4">
-            <DashboardHeader/>
+        <div key={refreshKey} className="flex flex-col gap-2">
+            <DashboardHeader primaryFields={SOURCE_PRIMARY_FIELDS} idSearchPrimary={false} orderPrimaryByList
+                             showGroupFilter showInvestTimeReset investTimeResetAll
+                             keywordFieldOptions={DATA_SOURCE_KEYWORD_FIELD_OPTIONS}/>
             <div className="flex items-center gap-2">
                 <button
                     type="button"
@@ -79,7 +87,9 @@ const DataSource: React.FC = () => {
                 </button>
             </div>
             <div className="rounded-sm border border-border bg-card p-4">
-                <SourceTable filters={filters}/>
+                <TableWithSelection>
+                    <SourceTable filters={filters}/>
+                </TableWithSelection>
             </div>
             <DashboardToolbar reportType="source"/>
         </div>

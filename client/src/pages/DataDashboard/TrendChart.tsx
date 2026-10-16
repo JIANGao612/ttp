@@ -66,32 +66,33 @@ const TrendChart: React.FC<TrendChartProps> = ({filters}) => {
         return {
             tooltip: {
                 trigger: 'axis',
-                axisPointer: {type: 'cross'},
                 valueFormatter: (value) => {
                     const num = Number(value);
                     if (num < 100) return num.toFixed(2);
-                    return Math.round(num).toLocaleString('en-US');
+                    return num.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2});
                 },
             },
             legend: {show: false},
-            grid: {left: '3%', right: '4%', bottom: '18%', containLabel: true},
+            grid: {top: 30, left: 4, right: 4, bottom: 42, containLabel: true},
             xAxis: {
                 type: 'category',
                 data: currentItems.map((i) => i.date),
-                axisLabel: {rotate: 35, fontSize: 11},
+                axisLabel: {fontSize: 11, hideOverlap: true},
             },
             yAxis: [
                 {
                     type: 'value',
                     name: '消耗',
-                    axisLabel: {fontSize: 11, formatter: (v: number) => Math.round(v).toLocaleString('en-US')},
+                    axisLabel: {
+                        fontSize: 11,
+                        formatter: (v: number) => Number(v).toLocaleString('en-US', {maximumFractionDigits: 0})
+                    },
                 },
                 {
                     type: 'value',
                     name: 'CPA',
                     min: 0,
-                    max: 60,
-                    axisLabel: {fontSize: 11, formatter: (v: number) => v.toFixed(2)},
+                    axisLabel: {fontSize: 11, formatter: (v: number) => v.toFixed(0)},
                 },
             ],
             dataZoom: [
@@ -105,8 +106,8 @@ const TrendChart: React.FC<TrendChartProps> = ({filters}) => {
                     type: 'slider',
                     start: startPercent,
                     end: 100,
-                    height: 20,
-                    bottom: 8,
+                    height: 14,
+                    bottom: 4,
                     brushSelect: false,
                 },
             ],
@@ -132,8 +133,8 @@ const TrendChart: React.FC<TrendChartProps> = ({filters}) => {
     }, [currentItems]);
 
     return (
-        <div className="rounded-sm border border-border bg-card p-4">
-            <div className="mb-4 flex items-center justify-between">
+        <div className="rounded-sm border border-border bg-card p-3">
+            <div className="mb-2 flex items-center justify-between">
                 <h3 className="font-serif text-sm font-semibold text-foreground">消耗 / CPA 趋势</h3>
                 <div className="flex items-center gap-1 rounded-md border border-border p-0.5">
                     {(['self', 'market'] as const).map((scope) => (
@@ -165,17 +166,17 @@ const TrendChart: React.FC<TrendChartProps> = ({filters}) => {
                     <EmptyDescription>请调整筛选条件或上传数据后查看</EmptyDescription>
                 </Empty>
             ) : (
-                <Suspense fallback={<Skeleton className="h-[320px] w-full"/>}>
+                <Suspense fallback={<Skeleton className="h-[300px] w-full"/>}>
                     <ReactECharts
                         key={`${activeScope}-${dataVersion}`}
                         option={option}
                         theme="ud"
-                        className="h-[320px] w-full"
+                        className="h-[300px] w-full"
                     />
                 </Suspense>
             )}
             {canLoadMore && (
-                <div className="flex justify-center pt-2">
+                <div className="flex justify-center pt-1">
                     <Button
                         variant="ghost"
                         size="sm"

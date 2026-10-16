@@ -5,6 +5,7 @@ import {toast} from 'sonner';
 import {logger} from '@client/src/utils/logger';
 import {exportData, getLastUpdated} from '@client/src/api/ad-data';
 import {assertDownloadAllowed, authorizeExport} from '@client/src/utils/export-guard';
+import {getBackendErrorMsg} from '@client/src/utils/backend-error';
 import type {ReportType, LastUpdatedResponse} from '@shared/api.interface';
 import {useDashboard} from './DashboardContext';
 
@@ -67,12 +68,14 @@ const DashboardToolbar: React.FC<DashboardToolbarProps> = ({reportType}) => {
                 return;
             }
             logger.error('Export failed:', err);
-            const backendMsg = (err as { response?: { data?: { message?: string } } }).response?.data?.message;
+            const backendMsg = getBackendErrorMsg(err, '');
             let message: string;
             if (backendMsg) {
                 message = backendMsg;
             } else if (err instanceof Error && err.message.includes('timeout')) {
                 message = '导出超时：数据量过大，请缩小日期范围或筛选条件后重试';
+            } else if (err instanceof Error && err.message) {
+                message = err.message;
             } else {
                 message = '导出失败，请稍后重试';
             }

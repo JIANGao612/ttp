@@ -35,11 +35,13 @@ import RegisterPage from './pages/Login/RegisterPage';     // 注册页
 // ============ 受保护页面 ============
 import ChangePasswordPage from './pages/Login/ChangePasswordPage';   // 修改密码（独立全屏）
 import UserManagementPage from './pages/Admin/UserManagementPage';   // 用户管理（管理员专用）
+import DataUpload from './pages/DataUpload/DataUpload';
 
 // ============ 业务页面 ============
 import {DashboardProvider} from './pages/shared/DashboardContext'; // 全局筛选状态 Provider
 import DataSource from './pages/DataSource/DataSource';              // 数据源页面
 import DailyTimes from './pages/DailyTimes/DailyTimes';              // 日报时报页面
+import CreativeAssetRegistry from './pages/CreativeAssetRegistry/CreativeAssetRegistry';
 
 const RoutesComponent = () => {
     return (
@@ -80,6 +82,9 @@ const RoutesComponent = () => {
                             <Route index element={<DataSource/>}/>
                             {/* 日报时报页 */}
                             <Route path="daily-times" element={<DailyTimes/>}/>
+                            {/* 数据上传页 */}
+                            <Route path="upload" element={<DataUpload/>}/>
+                            <Route path="creative-asset-registry" element={<CreativeAssetRegistry/>}/>
                         </Route>
 
                         {/* 2.2.2 用户管理页（管理员专用）

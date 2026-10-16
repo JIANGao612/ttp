@@ -1,7 +1,7 @@
-import {Injectable, Logger} from '@nestjs/common';
-import {ExternalDbService} from '../external-db/external-db.service';
-import {sql} from 'drizzle-orm';
-import type {PostgresJsDatabase} from 'drizzle-orm/postgres-js';
+import { Injectable, Logger } from '@nestjs/common';
+import { ExternalDbService } from '../external-db/external-db.service';
+import { sql } from 'drizzle-orm';
+import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import type {
     CountryRegistryRow,
     CountryRegistryListResponse,
@@ -15,47 +15,17 @@ import type {
 } from '@shared/api.interface';
 
 const ENSURE_TABLE_SQL = `
-    CREATE TABLE IF NOT EXISTS country_registry
-    (
-        id
-        UUID
-        PRIMARY
-        KEY
-        DEFAULT
-        gen_random_uuid
-    (
-    ),
-        country VARCHAR
-    (
-        200
-    ) NOT NULL,
-        region VARCHAR
-    (
-        100
-    ) NOT NULL,
-        assessment_metric VARCHAR
-    (
-        200
-    ) NOT NULL DEFAULT '',
-        assessment_value VARCHAR
-    (
-        200
-    ) NOT NULL DEFAULT '',
-        status VARCHAR
-    (
-        20
-    ) NOT NULL DEFAULT '投放中',
+    CREATE TABLE IF NOT EXISTS country_registry (
+                                                    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        country VARCHAR(200) NOT NULL,
+        region VARCHAR(100) NOT NULL,
+        assessment_metric VARCHAR(200) NOT NULL DEFAULT '',
+        assessment_value VARCHAR(200) NOT NULL DEFAULT '',
+        status VARCHAR(20) NOT NULL DEFAULT '投放中',
         show_in_reports BOOLEAN NOT NULL DEFAULT false,
-        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW
-    (
-    ),
-        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW
-    (
-    ),
-        updated_by VARCHAR
-    (
-        200
-    )
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_by VARCHAR(200)
         );
 `;
 
@@ -66,6 +36,8 @@ const ALTER_COLUMNS_SQL = [
     "ALTER TABLE country_registry ALTER COLUMN assessment_value SET DEFAULT ''",
     `DO ${DQ} BEGIN
     ALTER TABLE country_registry ADD COLUMN IF NOT EXISTS show_in_reports BOOLEAN NOT NULL DEFAULT false;
+    ALTER TABLE country_registry ADD COLUMN IF NOT EXISTS assessment_value_new VARCHAR(200) NOT NULL DEFAULT '';
+    ALTER TABLE country_registry ADD COLUMN IF NOT EXISTS assessment_value_oct VARCHAR(200) NOT NULL DEFAULT '';
   EXCEPTION WHEN duplicate_column THEN NULL;
   END ${DQ}`,
     `DO ${DQ} BEGIN
@@ -87,36 +59,14 @@ const ALTER_COLUMNS_SQL = [
 ].join(';\n') + ';';
 
 const ENSURE_USER_DISPLAY_TABLE_SQL = `
-    CREATE TABLE IF NOT EXISTS user_country_display_settings
-    (
-        id
-        UUID
-        PRIMARY
-        KEY
-        DEFAULT
-        gen_random_uuid
-    (
-    ),
-        user_id VARCHAR
-    (
-        200
-    ) NOT NULL,
-        country_code VARCHAR
-    (
-        10
-    ) NOT NULL,
+    CREATE TABLE IF NOT EXISTS user_country_display_settings (
+                                                                 id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        user_id VARCHAR(200) NOT NULL,
+        country_code VARCHAR(10) NOT NULL,
         show BOOLEAN NOT NULL,
-        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW
-    (
-    ),
-        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW
-    (
-    ),
-        CONSTRAINT uq_user_country_display UNIQUE
-    (
-        user_id,
-        country_code
-    )
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        CONSTRAINT uq_user_country_display UNIQUE (user_id, country_code)
         );
 `;
 
@@ -152,57 +102,19 @@ export class CountryRegistryService {
     private readonly logger = new Logger(CountryRegistryService.name);
     private db: PostgresJsDatabase | null = null;
 
-    constructor(private readonly externalDb: ExternalDbService) {
-    }
+    constructor(private readonly externalDb: ExternalDbService) {}
 
     private async ensureDb(): Promise<PostgresJsDatabase> {
         if (this.db) return this.db;
-        const db = await this.externalDb.getDb();
-        await db.execute(sql.raw(ENSURE_TABLE_SQL));
-        await db.execute(sql.raw(ALTER_COLUMNS_SQL));
-        await db.execute(sql.raw(ENSURE_USER_DISPLAY_TABLE_SQL));
-        await this.backfillCountryNames(db);     // ← 用局部变量 db
-        await this.backfillSortOrder(db);        // ← 用局部变量 db
-        await this.backfillRegionColors(db);     // ← 用局部变量 db
-        await this.seedIfEmpty(db);              // ← 用局部变量 db
-        this.db = db;                            // ← 最后再赋值给 this.db
+        this.db = await this.externalDb.getDb();
+        await this.db.execute(sql.raw(ENSURE_TABLE_SQL));
+        await this.db.execute(sql.raw(ALTER_COLUMNS_SQL));
+        await this.db.execute(sql.raw(ENSURE_USER_DISPLAY_TABLE_SQL));
+        await this.backfillCountryNames(this.db);
+        await this.backfillSortOrder(this.db);
+        await this.backfillRegionColors(this.db);
         this.logger.log('country_registry tables ensured');
-        return db;
-    }
-
-    /** 首次启动时，如果 country_registry 表为空，就自动填充种子数据 */
-    private async seedIfEmpty(db: PostgresJsDatabase): Promise<void> {
-        const countResult = await db.execute(
-            sql`SELECT COUNT(*) ::int AS count
-                FROM country_registry`,
-        );
-        const count = Number((countResult as Array<Record<string, unknown>>)[0]?.count ?? 0);
-        if (count > 0) return;
-
-        this.logger.log('country_registry is empty, seeding initial data...');
-
-        const codes = Object.keys(COUNTRY_NAME_MAP);
-        for (let i = 0; i < codes.length; i++) {
-            const code = codes[i];
-            const name = COUNTRY_NAME_MAP[code];
-            const region = COUNTRY_REGION_MAP[code] ?? '其他';
-            const regionColor =
-                region === 'NA' ? '#bfdbfe'
-                    : region === 'EU' ? '#a3e635'
-                        : region === 'LATAM' ? '#fef3c7'
-                            : region === 'APAC' ? '#dcfce7'
-                                : region === 'EMEA (METAP)' ? '#fde68a'
-                                    : '#e5e7eb';
-
-            await db.execute(sql`
-                INSERT INTO country_registry (country, country_name, region, region_color, sort_order, status,
-                                              show_in_reports)
-                VALUES (${code}, ${name}, ${region}, ${regionColor}, ${i + 1}, '投放中',
-                        true) ON CONFLICT (country) DO NOTHING
-            `);
-        }
-
-        this.logger.log(`Seeded ${codes.length} countries`);
+        return this.db;
     }
 
     private async backfillCountryNames(db: PostgresJsDatabase): Promise<void> {
@@ -213,10 +125,10 @@ export class CountryRegistryService {
             .join(' ');
         const codesList = entries.map(([code]) => `'${code.replace(/'/g, "''")}'`).join(', ');
         await db.execute(sql.raw(`
-            UPDATE country_registry
-            SET country_name = CASE country ${caseClauses} ELSE country_name END
-            WHERE country IN (${codesList}) AND (country_name IS NULL OR country_name = '')
-        `));
+      UPDATE country_registry
+      SET country_name = CASE country ${caseClauses} ELSE country_name END
+      WHERE country IN (${codesList}) AND (country_name IS NULL OR country_name = '')
+    `));
     }
 
     private async backfillSortOrder(db: PostgresJsDatabase): Promise<void> {
@@ -233,17 +145,17 @@ export class CountryRegistryService {
         `));
 
         const maxOrderResult = await db.execute(sql`
-            SELECT COALESCE(MAX(sort_order), 0) ::int AS max_order
-            FROM country_registry
-            WHERE sort_order < 9999
-        `);
+      SELECT COALESCE(MAX(sort_order), 0)::int AS max_order
+      FROM country_registry
+      WHERE sort_order < 9999
+    `);
         const maxOrder = Number((maxOrderResult as Array<Record<string, unknown>>)[0]?.max_order ?? 0);
         const remainingRows = await db.execute(sql`
-            SELECT country, region
-            FROM country_registry
-            WHERE sort_order = 9999
-            ORDER BY region, country
-        `);
+      SELECT country, region
+      FROM country_registry
+      WHERE sort_order = 9999
+      ORDER BY region, country
+    `);
         const remaining = remainingRows as Array<Record<string, unknown>>;
         if (remaining.length > 0) {
             const updateClauses = remaining
@@ -251,10 +163,10 @@ export class CountryRegistryService {
                 .join(' ');
             const remainingCodes = remaining.map(r => `'${String(r.country).replace(/'/g, "''")}'`).join(', ');
             await db.execute(sql.raw(`
-                UPDATE country_registry
-                SET sort_order = CASE country ${updateClauses} ELSE sort_order END
-                WHERE country IN (${remainingCodes}) AND sort_order = 9999
-            `));
+        UPDATE country_registry
+        SET sort_order = CASE country ${updateClauses} ELSE sort_order END
+        WHERE country IN (${remainingCodes}) AND sort_order = 9999
+      `));
         }
     }
 
@@ -299,46 +211,27 @@ export class CountryRegistryService {
         const sortDir = params.sortOrder === 'ascend' ? 'ASC' : 'DESC';
 
         const countResult = await db.execute(
-            sql`SELECT COUNT(*) ::int as count
-                FROM country_registry`,
+            sql`SELECT COUNT(*)::int as count FROM country_registry`,
         );
         const total = Number((countResult as Array<Record<string, unknown>>)[0]?.count ?? 0);
 
         const rows = sortField === 'status'
             ? await db.execute(
-                sql`SELECT id,
-                           country,
-                           country_name,
-                           region,
-                           assessment_metric,
-                           assessment_value,
-                           status,
-                           created_at,
-                           updated_at
-                    FROM country_registry
-                    ORDER BY CASE status
-                                 WHEN '投放中' THEN 1
-                                 WHEN '未投放' THEN 2
-                                 WHEN '已暂停' THEN 3
-                                 ELSE 4
-                                 END ${sql.raw(sortDir)}, id ASC
-            LIMIT ${pageSize}
-                    OFFSET ${offset}`,
+                sql`SELECT id, country, country_name, region, assessment_metric, assessment_value, assessment_value_new, assessment_value_oct, status, created_at, updated_at
+            FROM country_registry
+            ORDER BY CASE status
+              WHEN '投放中' THEN 1
+              WHEN '未投放' THEN 2
+              WHEN '已暂停' THEN 3
+              ELSE 4
+            END ${sql.raw(sortDir)}, id ASC
+            LIMIT ${pageSize} OFFSET ${offset}`,
             )
             : await db.execute(
-                sql`SELECT id,
-                           country,
-                           country_name,
-                           region,
-                           assessment_metric,
-                           assessment_value,
-                           status,
-                           created_at,
-                           updated_at
-                    FROM country_registry
-                    ORDER BY ${sql.raw(sortField)} ${sql.raw(sortDir)}
-            LIMIT ${pageSize}
-                    OFFSET ${offset}`,
+                sql`SELECT id, country, country_name, region, assessment_metric, assessment_value, assessment_value_new, assessment_value_oct, status, created_at, updated_at
+            FROM country_registry
+            ORDER BY ${sql.raw(sortField)} ${sql.raw(sortDir)} NULLS LAST, id ASC
+            LIMIT ${pageSize} OFFSET ${offset}`,
             );
 
         const items: CountryRegistryRow[] = (rows as Array<Record<string, unknown>>).map(
@@ -349,24 +242,24 @@ export class CountryRegistryService {
                 region: String(r.region ?? ''),
                 assessmentMetric: String(r.assessment_metric ?? ''),
                 assessmentValue: String(r.assessment_value ?? ''),
+                assessmentValueNew: String(r.assessment_value_new ?? ''),
+                assessmentValueOct: String(r.assessment_value_oct ?? ''),
                 status: String(r.status ?? '投放中') as CountryRegistryRow['status'],
                 createdAt: r.created_at instanceof Date ? r.created_at.toISOString() : String(r.created_at ?? ''),
                 updatedAt: r.updated_at instanceof Date ? r.updated_at.toISOString() : String(r.updated_at ?? ''),
             }),
         );
 
-        return {items, total, page, pageSize};
+        return { items, total, page, pageSize };
     }
 
     async create(dto: CountryRegistryCreateDto): Promise<CountryRegistryRow> {
         const db = await this.ensureDb();
         const countryName = dto.countryName?.trim() || COUNTRY_NAME_MAP[dto.country] || '';
         const rows = await db.execute(
-            sql`INSERT INTO country_registry (country, country_name, region, assessment_metric, assessment_value,
-                                              status)
-                VALUES (${dto.country}, ${countryName}, ${dto.region}, ${dto.assessmentMetric ?? ''},
-                        ${dto.assessmentValue ?? ''},
-                        ${dto.status}) RETURNING id, country, country_name, region, assessment_metric, assessment_value, status, created_at, updated_at`,
+            sql`INSERT INTO country_registry (country, country_name, region, assessment_metric, assessment_value, assessment_value_new, assessment_value_oct, status)
+        VALUES (${dto.country}, ${countryName}, ${dto.region}, ${dto.assessmentMetric ?? ''}, ${dto.assessmentValue ?? ''}, ${dto.assessmentValueNew ?? ''}, ${dto.assessmentValueOct ?? ''}, ${dto.status})
+        RETURNING id, country, country_name, region, assessment_metric, assessment_value, assessment_value_new, assessment_value_oct, status, created_at, updated_at`,
         );
         const r = (rows as Array<Record<string, unknown>>)[0];
         return {
@@ -376,6 +269,8 @@ export class CountryRegistryService {
             region: String(r.region ?? ''),
             assessmentMetric: String(r.assessment_metric ?? ''),
             assessmentValue: String(r.assessment_value ?? ''),
+            assessmentValueNew: String(r.assessment_value_new ?? ''),
+            assessmentValueOct: String(r.assessment_value_oct ?? ''),
             status: String(r.status ?? '投放中') as CountryRegistryRow['status'],
             createdAt: r.created_at instanceof Date ? r.created_at.toISOString() : String(r.created_at ?? ''),
             updatedAt: r.updated_at instanceof Date ? r.updated_at.toISOString() : String(r.updated_at ?? ''),
@@ -388,10 +283,9 @@ export class CountryRegistryService {
     ): Promise<CountryRegistryRow> {
         const db = await this.ensureDb();
         const rows = await db.execute(
-            sql`UPDATE country_registry
-                SET status     = ${status},
-                    updated_at = NOW()
-                WHERE id = ${id} RETURNING id, country, country_name, region, assessment_metric, assessment_value, status, created_at, updated_at`,
+            sql`UPDATE country_registry SET status = ${status}, updated_at = NOW()
+        WHERE id = ${id}
+        RETURNING id, country, country_name, region, assessment_metric, assessment_value, assessment_value_new, assessment_value_oct, status, created_at, updated_at`,
         );
         const r = (rows as Array<Record<string, unknown>>)[0];
         if (!r) throw new Error('NOT_FOUND');
@@ -402,6 +296,8 @@ export class CountryRegistryService {
             region: String(r.region ?? ''),
             assessmentMetric: String(r.assessment_metric ?? ''),
             assessmentValue: String(r.assessment_value ?? ''),
+            assessmentValueNew: String(r.assessment_value_new ?? ''),
+            assessmentValueOct: String(r.assessment_value_oct ?? ''),
             status: String(r.status ?? '投放中') as CountryRegistryRow['status'],
             createdAt: r.created_at instanceof Date ? r.created_at.toISOString() : String(r.created_at ?? ''),
             updatedAt: r.updated_at instanceof Date ? r.updated_at.toISOString() : String(r.updated_at ?? ''),
@@ -413,49 +309,34 @@ export class CountryRegistryService {
         const setParts: ReturnType<typeof sql>[] = [];
 
         if (dto.country !== undefined) {
-            setParts.push(sql`country
-            =
-            ${dto.country}`);
+            setParts.push(sql`country = ${dto.country}`);
         }
         if (dto.countryName !== undefined) {
-            setParts.push(sql`country_name
-            =
-            ${dto.countryName}`);
+            setParts.push(sql`country_name = ${dto.countryName}`);
         }
         if (dto.region !== undefined) {
-            setParts.push(sql`region
-            =
-            ${dto.region}`);
+            setParts.push(sql`region = ${dto.region}`);
         }
         if (dto.assessmentMetric !== undefined) {
-            setParts.push(sql`assessment_metric
-            =
-            ${dto.assessmentMetric}`);
+            setParts.push(sql`assessment_metric = ${dto.assessmentMetric}`);
         }
         if (dto.assessmentValue !== undefined) {
-            setParts.push(sql`assessment_value
-            =
-            ${dto.assessmentValue}`);
+            setParts.push(sql`assessment_value = ${dto.assessmentValue}`);
+        }
+        if (dto.assessmentValueNew !== undefined) {
+            setParts.push(sql`assessment_value_new = ${dto.assessmentValueNew}`);
+        }
+        if (dto.assessmentValueOct !== undefined) {
+            setParts.push(sql`assessment_value_oct = ${dto.assessmentValueOct}`);
         }
         if (dto.status !== undefined) {
-            setParts.push(sql`status
-            =
-            ${dto.status}`);
+            setParts.push(sql`status = ${dto.status}`);
         }
 
         if (setParts.length === 0) {
             const existing = await db.execute(
-                sql`SELECT id,
-                           country,
-                           country_name,
-                           region,
-                           assessment_metric,
-                           assessment_value,
-                           status,
-                           created_at,
-                           updated_at
-                    FROM country_registry
-                    WHERE id = ${id}`,
+                sql`SELECT id, country, country_name, region, assessment_metric, assessment_value, assessment_value_new, assessment_value_oct, status, created_at, updated_at
+          FROM country_registry WHERE id = ${id}`,
             );
             const r = (existing as Array<Record<string, unknown>>)[0];
             if (!r) throw new Error('NOT_FOUND');
@@ -466,19 +347,19 @@ export class CountryRegistryService {
                 region: String(r.region ?? ''),
                 assessmentMetric: String(r.assessment_metric ?? ''),
                 assessmentValue: String(r.assessment_value ?? ''),
+                assessmentValueNew: String(r.assessment_value_new ?? ''),
+                assessmentValueOct: String(r.assessment_value_oct ?? ''),
                 status: String(r.status ?? '投放中') as CountryRegistryRow['status'],
                 createdAt: r.created_at instanceof Date ? r.created_at.toISOString() : String(r.created_at ?? ''),
                 updatedAt: r.updated_at instanceof Date ? r.updated_at.toISOString() : String(r.updated_at ?? ''),
             };
         }
 
-        setParts.push(sql`updated_at
-        = NOW()`);
+        setParts.push(sql`updated_at = NOW()`);
 
         const rows = await db.execute(
-            sql`UPDATE country_registry
-                SET ${sql.join(setParts, sql`, `)}
-                WHERE id = ${id} RETURNING id, country, country_name, region, assessment_metric, assessment_value, status, created_at, updated_at`,
+            sql`UPDATE country_registry SET ${sql.join(setParts, sql`, `)} WHERE id = ${id}
+        RETURNING id, country, country_name, region, assessment_metric, assessment_value, assessment_value_new, assessment_value_oct, status, created_at, updated_at`,
         );
 
         const r = (rows as Array<Record<string, unknown>>)[0];
@@ -490,6 +371,8 @@ export class CountryRegistryService {
             region: String(r.region ?? ''),
             assessmentMetric: String(r.assessment_metric ?? ''),
             assessmentValue: String(r.assessment_value ?? ''),
+            assessmentValueNew: String(r.assessment_value_new ?? ''),
+            assessmentValueOct: String(r.assessment_value_oct ?? ''),
             status: String(r.status ?? '投放中') as CountryRegistryRow['status'],
             createdAt: r.created_at instanceof Date ? r.created_at.toISOString() : String(r.created_at ?? ''),
             updatedAt: r.updated_at instanceof Date ? r.updated_at.toISOString() : String(r.updated_at ?? ''),
@@ -498,29 +381,22 @@ export class CountryRegistryService {
 
     async delete(id: string): Promise<void> {
         const db = await this.ensureDb();
-        await db.execute(sql`DELETE
-                             FROM country_registry
-                             WHERE id = ${id}`);
+        await db.execute(sql`DELETE FROM country_registry WHERE id = ${id}`);
     }
 
     async getActiveCountries(userId?: string): Promise<string[]> {
         const db = await this.ensureDb();
         if (userId) {
             const rows = await db.execute(
-                sql`SELECT cr.country
-                    FROM country_registry cr
-                             LEFT JOIN user_country_display_settings uds
-                                       ON cr.country = uds.country_code AND uds.user_id = ${userId}
-                    WHERE (uds.show = true)
-                       OR (uds.show IS NULL AND cr.status = '投放中')`,
+                sql`SELECT cr.country FROM country_registry cr
+          LEFT JOIN user_country_display_settings uds
+            ON cr.country = uds.country_code AND uds.user_id = ${userId}
+          WHERE (uds.show = true) OR (uds.show IS NULL AND cr.status = '投放中')`,
             );
             return (rows as Array<Record<string, unknown>>).map((r) => String(r.country ?? ''));
         }
         const rows = await db.execute(
-            sql`SELECT country
-                FROM country_registry
-                WHERE status = '投放中'
-                   OR show_in_reports = true`,
+            sql`SELECT country FROM country_registry WHERE status = '投放中' OR show_in_reports = true`,
         );
         return (rows as Array<Record<string, unknown>>).map((r) => String(r.country ?? ''));
     }
@@ -528,9 +404,7 @@ export class CountryRegistryService {
     async getPausedCountries(): Promise<string[]> {
         const db = await this.ensureDb();
         const rows = await db.execute(
-            sql`SELECT country
-                FROM country_registry
-                WHERE status != '投放中'`,
+            sql`SELECT country FROM country_registry WHERE status != '投放中'`,
         );
         return (rows as Array<Record<string, unknown>>).map((r) => String(r.country ?? ''));
     }
@@ -538,11 +412,7 @@ export class CountryRegistryService {
     async getRegions(): Promise<string[]> {
         const db = await this.ensureDb();
         const rows = await db.execute(
-            sql`SELECT DISTINCT region
-                FROM country_registry
-                WHERE region IS NOT NULL
-                  AND region != ''
-                ORDER BY region`,
+            sql`SELECT DISTINCT region FROM country_registry WHERE region IS NOT NULL AND region != '' ORDER BY region`,
         );
         return (rows as Array<Record<string, unknown>>).map((r) => String(r.region ?? ''));
     }
@@ -555,12 +425,15 @@ export class CountryRegistryService {
         sortOrder: number;
         status: string;
         showInReports: boolean;
+        assessmentValue: string;
+        assessmentValueNew: string;
+        assessmentValueOct: string;
     }>> {
         const db = await this.ensureDb();
         const rows = await db.execute(sql`
-            SELECT country, country_name, region, region_color, sort_order, status, show_in_reports
+            SELECT country, country_name, region, region_color, sort_order, status, show_in_reports, assessment_value, assessment_value_new, assessment_value_oct
             FROM country_registry
-            WHERE 1 = 1
+            WHERE 1=1
             ORDER BY sort_order ASC, country ASC
         `);
         return (rows as Array<Record<string, unknown>>).map((r) => ({
@@ -571,6 +444,9 @@ export class CountryRegistryService {
             sortOrder: Number(r.sort_order ?? 9999),
             status: String(r.status ?? '投放中'),
             showInReports: Boolean(r.show_in_reports),
+            assessmentValue: String(r.assessment_value ?? ''),
+            assessmentValueNew: String(r.assessment_value_new ?? ''),
+            assessmentValueOct: String(r.assessment_value_oct ?? ''),
         }));
     }
 
@@ -591,16 +467,13 @@ export class CountryRegistryService {
                 showInReports: Boolean(r.show_in_reports),
             }),
         );
-        return {items};
+        return { items };
     }
 
     async setVisibility(id: string, showInReports: boolean): Promise<void> {
         const db = await this.ensureDb();
         await db.execute(
-            sql`UPDATE country_registry
-                SET show_in_reports = ${showInReports},
-                    updated_at      = NOW()
-                WHERE id = ${id}`,
+            sql`UPDATE country_registry SET show_in_reports = ${showInReports}, updated_at = NOW() WHERE id = ${id}`,
         );
     }
 
@@ -608,9 +481,7 @@ export class CountryRegistryService {
         const db = await this.ensureDb();
 
         const countryRows = await db.execute(
-            sql`SELECT country, status
-                FROM country_registry
-                ORDER BY country`,
+            sql`SELECT country, status FROM country_registry ORDER BY country`,
         ) as Array<Record<string, unknown>>;
         const countries: Array<{ code: string; status: string }> = countryRows.map((r) => ({
             code: String(r.country ?? ''),
@@ -618,8 +489,7 @@ export class CountryRegistryService {
         }));
 
         const userRows = await db.execute(
-            sql`SELECT DISTINCT user_id
-                FROM user_country_display_settings`,
+            sql`SELECT DISTINCT user_id FROM user_country_display_settings`,
         ) as Array<Record<string, unknown>>;
         const userIds: string[] = userRows.map((r) => String(r.user_id ?? ''));
 
@@ -632,8 +502,8 @@ export class CountryRegistryService {
                 try {
                     await db.execute(
                         sql`INSERT INTO user_country_display_settings (user_id, country_code, show)
-                            VALUES (${userId}, ${c.code}, ${defaultShow}) ON CONFLICT (user_id, country_code) DO
-                        UPDATE SET show = ${defaultShow}, updated_at = NOW()`,
+              VALUES (${userId}, ${c.code}, ${defaultShow})
+              ON CONFLICT (user_id, country_code) DO UPDATE SET show = ${defaultShow}, updated_at = NOW()`,
                     );
                     resetCount++;
                 } catch (err) {
@@ -646,10 +516,8 @@ export class CountryRegistryService {
         }
 
         const dataSourceCountries = await db.execute(
-            sql`SELECT DISTINCT country
-                FROM data_source
-                WHERE country IS NOT NULL
-                  AND country != '' AND cost > 0`,
+            sql`SELECT DISTINCT country FROM data_source
+        WHERE country IS NOT NULL AND country != '' AND cost > 0`,
         ) as Array<Record<string, unknown>>;
         const dataSourceCountrySet = new Set(
             dataSourceCountries.map((r) => String(r.country ?? '')),
@@ -686,9 +554,7 @@ export class CountryRegistryService {
     ): Promise<void> {
         const db = await this.ensureDb();
         await db.execute(
-            sql`DELETE
-                FROM user_country_display_settings
-                WHERE country_code = ${countryCode}`,
+            sql`DELETE FROM user_country_display_settings WHERE country_code = ${countryCode}`,
         );
         this.logger.log(
             `Reset all user display settings for country ${countryCode} (new status: ${newStatus})`,
@@ -698,9 +564,7 @@ export class CountryRegistryService {
     async getAllCountries(): Promise<Array<{ code: string; name: string; region: string; status: string }>> {
         const db = await this.ensureDb();
         const rows = await db.execute(
-            sql`SELECT country, country_name, region, status
-                FROM country_registry
-                ORDER BY country`,
+            sql`SELECT country, country_name, region, status FROM country_registry ORDER BY country`,
         );
         return (rows as Array<Record<string, unknown>>).map((r) => ({
             code: String(r.country ?? ''),
@@ -709,7 +573,6 @@ export class CountryRegistryService {
             status: String(r.status ?? '投放中'),
         }));
     }
-
     async batchImport(
         items: CountryRegistryBatchImportItem[],
     ): Promise<CountryRegistryBatchImportResponse> {
@@ -719,36 +582,32 @@ export class CountryRegistryService {
 
         for (const item of items) {
             const existing = await db.execute(
-                sql`SELECT id
-                    FROM country_registry
-                    WHERE country = ${item.country}`,
+                sql`SELECT id FROM country_registry WHERE country = ${item.country}`,
             );
             const exists = (existing as Array<Record<string, unknown>>).length > 0;
 
             if (exists) {
                 await db.execute(sql`
-                    UPDATE country_registry
-                    SET country_name      = ${item.countryName},
-                        region            = ${item.region},
-                        assessment_metric = ${item.assessmentMetric},
-                        assessment_value  = ${item.assessmentValue},
-                        status            = ${item.status},
-                        updated_at        = NOW()
-                    WHERE country = ${item.country}
-                `);
+          UPDATE country_registry
+          SET country_name = ${item.countryName},
+              region = ${item.region},
+              assessment_metric = ${item.assessmentMetric},
+              assessment_value = ${item.assessmentValue},
+              status = ${item.status},
+              updated_at = NOW()
+          WHERE country = ${item.country}
+        `);
                 updated++;
             } else {
                 await db.execute(sql`
-                    INSERT INTO country_registry (country, country_name, region, assessment_metric, assessment_value,
-                                                  status)
-                    VALUES (${item.country}, ${item.countryName}, ${item.region}, ${item.assessmentMetric},
-                            ${item.assessmentValue}, ${item.status})
-                `);
+          INSERT INTO country_registry (country, country_name, region, assessment_metric, assessment_value, status)
+          VALUES (${item.country}, ${item.countryName}, ${item.region}, ${item.assessmentMetric}, ${item.assessmentValue}, ${item.status})
+        `);
                 inserted++;
             }
         }
 
         this.logger.log(`Batch import: ${inserted} inserted, ${updated} updated`);
-        return {inserted, updated};
+        return { inserted, updated };
     }
 }

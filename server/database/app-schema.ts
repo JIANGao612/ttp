@@ -5,21 +5,8 @@
  * code_gen 从应用库拉 schema 时会丢失这些表定义，导致编译失败。
  * 因此业务代码统一从本文件导入表定义，而非自动生成的 schema.ts。
  */
-import {sql} from 'drizzle-orm';
-import {
-    boolean,
-    date,
-    index,
-    integer,
-    jsonb,
-    numeric,
-    pgTable,
-    text,
-    uniqueIndex,
-    uuid,
-    varchar,
-    customType
-} from "drizzle-orm/pg-core"
+import { sql } from 'drizzle-orm';
+import { boolean, date, index, integer, jsonb, numeric, pgTable, text, uniqueIndex, uuid, varchar, customType } from "drizzle-orm/pg-core"
 
 export const customTimestamptz = customType<{
     data: Date;
@@ -53,13 +40,7 @@ export const userProfile = customType<{
         return 'user_profile';
     },
     toDriver(value: string) {
-        return sql`ROW
-        (
-        ${value}
-        )
-        :
-        :
-        user_profile`;
+        return sql`ROW(${value})::user_profile`;
     },
     fromDriver(value: string) {
         const [userId] = value.slice(1, -1).split(',');
@@ -80,18 +61,11 @@ export const fileAttachment = customType<{
         return 'file_attachment';
     },
     toDriver(value: FileAttachment) {
-        return sql`ROW
-        (
-        ${value.bucket_id},
-        ${value.file_path}
-        )
-        :
-        :
-        file_attachment`;
+        return sql`ROW(${value.bucket_id},${value.file_path})::file_attachment`;
     },
     fromDriver(value: string): FileAttachment {
         const [bucketId, filePath] = value.slice(1, -1).split(',');
-        return {bucket_id: bucketId.trim(), file_path: filePath.trim()};
+        return { bucket_id: bucketId.trim(), file_path: filePath.trim() };
     },
 });
 
@@ -143,32 +117,32 @@ export const fileAttachmentArray = customType<{
         const matches = inner.match(/\([^)]*\)/g) || [];
         return matches.map(m => {
             const [bucketId, filePath] = m.slice(1, -1).split(',');
-            return {bucket_id: bucketId.trim(), file_path: filePath.trim()};
+            return { bucket_id: bucketId.trim(), file_path: filePath.trim() };
         });
     },
 });
 
 export const capacityPlanning = pgTable("capacity_planning", {
     id: uuid("id").primaryKey().defaultRandom(),
-    week: varchar("week", {length: 100}),
-    country: varchar("country", {length: 500}),
-    groupMembers: varchar("group_members", {length: 500}),
+    week: varchar("week", { length: 100 }),
+    country: varchar("country", { length: 500 }),
+    groupMembers: varchar("group_members", { length: 500 }),
     targetCount: integer("target_count").default(0),
-    sourceType: varchar("source_type", {length: 100}),
-    industry: varchar("industry", {length: 100}),
-    categoryLevel1: varchar("category_level1", {length: 100}),
+    sourceType: varchar("source_type", { length: 100 }),
+    industry: varchar("industry", { length: 100 }),
+    categoryLevel1: varchar("category_level1", { length: 100 }),
     functionName: text("function_name"),
     requirement: text("requirement"),
     painPoint: text("pain_point"),
     categoryLevel2: text("category_level2"),
     categoryLevel3: text("category_level3"),
-    weekStatus: varchar("week_status", {length: 100}),
+    weekStatus: varchar("week_status", { length: 100 }),
     remark: text("remark"),
-    bitableRecordId: varchar("bitable_record_id", {length: 100}),
-    createdAt: customTimestamptz("_created_at", {precision: 3}).notNull().default(sql`CURRENT_TIMESTAMP`),
+    bitableRecordId: varchar("bitable_record_id", { length: 100 }),
+    createdAt: customTimestamptz("_created_at", { precision: 3 }).notNull().default(sql`CURRENT_TIMESTAMP`),
     createdBy: userProfile("_created_by").default(sql`CASE
     WHEN (current_setting('app.user_id'::text, true) = ''::text) THEN NULL`),
-    updatedAt: customTimestamptz("_updated_at", {precision: 3}).notNull().default(sql`CURRENT_TIMESTAMP`),
+    updatedAt: customTimestamptz("_updated_at", { precision: 3 }).notNull().default(sql`CURRENT_TIMESTAMP`),
     updatedBy: userProfile("_updated_by").default(sql`CASE
     WHEN (current_setting('app.user_id'::text, true) = ''::text) THEN NULL`),
 });
@@ -176,12 +150,12 @@ export const capacityPlanning = pgTable("capacity_planning", {
 export const pivotView = pgTable("pivot_view", {
     id: uuid("id").primaryKey().defaultRandom(),
     ownerUid: userProfile("owner_uid").notNull(),
-    name: varchar("name", {length: 100}).notNull(),
+    name: varchar("name", { length: 100 }).notNull(),
     config: text("config").notNull(),
-    createdAt: customTimestamptz("_created_at", {precision: 3}).notNull().default(sql`CURRENT_TIMESTAMP`),
+    createdAt: customTimestamptz("_created_at", { precision: 3 }).notNull().default(sql`CURRENT_TIMESTAMP`),
     createdBy: userProfile("_created_by").default(sql`CASE
     WHEN (current_setting('app.user_id'::text, true) = ''::text) THEN NULL`),
-    updatedAt: customTimestamptz("_updated_at", {precision: 3}).notNull().default(sql`CURRENT_TIMESTAMP`),
+    updatedAt: customTimestamptz("_updated_at", { precision: 3 }).notNull().default(sql`CURRENT_TIMESTAMP`),
     updatedBy: userProfile("_updated_by").default(sql`CASE
     WHEN (current_setting('app.user_id'::text, true) = ''::text) THEN NULL`),
 }, (table) => [
@@ -190,22 +164,22 @@ export const pivotView = pgTable("pivot_view", {
 
 export const teamMemberMapping = pgTable("team_member_mapping", {
     id: uuid("id").primaryKey().defaultRandom(),
-    memberName: varchar("member_name", {length: 100}).notNull(),
-    memberId: varchar("member_id", {length: 50}).notNull(),
-    codeName: varchar("code_name", {length: 100}).notNull(),
+    memberName: varchar("member_name", { length: 100 }).notNull(),
+    memberId: varchar("member_id", { length: 50 }).notNull(),
+    codeName: varchar("code_name", { length: 100 }).notNull(),
     startDate: date("start_date"),
     endDate: date("end_date"),
-    dataSource: varchar("data_source", {length: 50}).notNull().default('promote'),
-    matchField: varchar("match_field", {length: 50}).notNull().default('ad_group_name'),
-    codePurpose: varchar("code_purpose", {length: 50}).notNull().default('team_cost'),
-    groupName: varchar("group_name", {length: 50}),
+    dataSource: varchar("data_source", { length: 50 }).notNull().default('promote'),
+    matchField: varchar("match_field", { length: 50 }).notNull().default('ad_group_name'),
+    codePurpose: varchar("code_purpose", { length: 50 }).notNull().default('team_cost'),
+    groupName: varchar("group_name", { length: 50 }),
     specialScopeMarker: text("special_scope_marker"),
     country: text("country"),
     materialType: text("material_type"),
-    createdAt: customTimestamptz("_created_at", {precision: 3}).notNull().default(sql`CURRENT_TIMESTAMP`),
+    createdAt: customTimestamptz("_created_at", { precision: 3 }).notNull().default(sql`CURRENT_TIMESTAMP`),
     createdBy: userProfile("_created_by").default(sql`CASE
     WHEN (current_setting('app.user_id'::text, true) = ''::text) THEN NULL`),
-    updatedAt: customTimestamptz("_updated_at", {precision: 3}).notNull().default(sql`CURRENT_TIMESTAMP`),
+    updatedAt: customTimestamptz("_updated_at", { precision: 3 }).notNull().default(sql`CURRENT_TIMESTAMP`),
     updatedBy: userProfile("_updated_by").default(sql`CASE
     WHEN (current_setting('app.user_id'::text, true) = ''::text) THEN NULL`),
 }, (table) => [
@@ -215,7 +189,7 @@ export const teamMemberMapping = pgTable("team_member_mapping", {
 
 export const dashboardConfig = pgTable("dashboard_config", {
     id: uuid("id").primaryKey().defaultRandom(),
-    name: varchar("name", {length: 100}).notNull(),
+    name: varchar("name", { length: 100 }).notNull(),
     description: text("description"),
     /**
      * @type { chartId: string; x: number; y: number; w: number; h: number }
@@ -226,10 +200,10 @@ export const dashboardConfig = pgTable("dashboard_config", {
      */
     charts: jsonb("charts").notNull().default('[]'),
     isDefault: boolean("is_default").notNull().default(false),
-    createdAt: customTimestamptz("_created_at", {precision: 3}).notNull().default(sql`CURRENT_TIMESTAMP`),
+    createdAt: customTimestamptz("_created_at", { precision: 3 }).notNull().default(sql`CURRENT_TIMESTAMP`),
     createdBy: userProfile("_created_by").default(sql`CASE
     WHEN (current_setting('app.user_id'::text, true) = ''::text) THEN NULL`),
-    updatedAt: customTimestamptz("_updated_at", {precision: 3}).notNull().default(sql`CURRENT_TIMESTAMP`),
+    updatedAt: customTimestamptz("_updated_at", { precision: 3 }).notNull().default(sql`CURRENT_TIMESTAMP`),
     updatedBy: userProfile("_updated_by").default(sql`CASE
     WHEN (current_setting('app.user_id'::text, true) = ''::text) THEN NULL`),
 });
@@ -251,10 +225,10 @@ export const roiSourceData = pgTable("roi_source_data", {
     assessment: text("assessment"),
     newOrReactivate: text("new_or_reactivate"),
     direction: text("direction"),
-    createdAt: customTimestamptz("_created_at", {precision: 3}).notNull().default(sql`CURRENT_TIMESTAMP`),
+    createdAt: customTimestamptz("_created_at", { precision: 3 }).notNull().default(sql`CURRENT_TIMESTAMP`),
     createdBy: userProfile("_created_by").default(sql`CASE
     WHEN (current_setting('app.user_id'::text, true) = ''::text) THEN NULL`),
-    updatedAt: customTimestamptz("_updated_at", {precision: 3}).notNull().default(sql`CURRENT_TIMESTAMP`),
+    updatedAt: customTimestamptz("_updated_at", { precision: 3 }).notNull().default(sql`CURRENT_TIMESTAMP`),
     updatedBy: userProfile("_updated_by").default(sql`CASE
     WHEN (current_setting('app.user_id'::text, true) = ''::text) THEN NULL`),
 });
@@ -262,7 +236,7 @@ export const roiSourceData = pgTable("roi_source_data", {
 
 export const feishuBot = pgTable("feishu_bot", {
     id: uuid("id").primaryKey().defaultRandom(),
-    name: varchar("name", {length: 100}).notNull(),
+    name: varchar("name", { length: 100 }).notNull(),
     webhookUrl: text("webhook_url").notNull(),
     /**
      * @type { logic: string; conditions: Array<{ field: string; operator: string; value: string | number | string[] }> }
@@ -270,31 +244,32 @@ export const feishuBot = pgTable("feishu_bot", {
     conditions: jsonb("conditions").notNull().default('{"logic": "and", "conditions": []}'),
     messageTemplate: text("message_template").notNull(),
     isActive: boolean("is_active").notNull().default(true),
-    messageTitle: varchar("message_title", {length: 200}).notNull().default('素材预警通知'),
+    messageTitle: varchar("message_title", { length: 200 }).notNull().default('素材预警通知'),
     scheduleEnabled: boolean("schedule_enabled").notNull().default(false),
-    scheduleTime: varchar("schedule_time", {length: 10}).notNull().default('09:00'),
-    lastScheduledAt: customTimestamptz("last_scheduled_at", {precision: 3}),
-    createdAt: customTimestamptz("_created_at", {precision: 3}).notNull().default(sql`CURRENT_TIMESTAMP`),
+    scheduleTime: varchar("schedule_time", { length: 10 }).notNull().default('09:00'),
+    lastScheduledAt: customTimestamptz("last_scheduled_at", { precision: 3 }),
+    sortOrder: integer("sort_order").notNull().default(0),
+    createdAt: customTimestamptz("_created_at", { precision: 3 }).notNull().default(sql`CURRENT_TIMESTAMP`),
     createdBy: userProfile("_created_by").default(sql`CASE
     WHEN (current_setting('app.user_id'::text, true) = ''::text) THEN NULL`),
-    updatedAt: customTimestamptz("_updated_at", {precision: 3}).notNull().default(sql`CURRENT_TIMESTAMP`),
+    updatedAt: customTimestamptz("_updated_at", { precision: 3 }).notNull().default(sql`CURRENT_TIMESTAMP`),
     updatedBy: userProfile("_updated_by").default(sql`CASE
     WHEN (current_setting('app.user_id'::text, true) = ''::text) THEN NULL`),
 });
 
 export const bitableDataBackup = pgTable("bitable_data_backup", {
     id: uuid("id").primaryKey().defaultRandom(),
-    pluginInstanceId: varchar("plugin_instance_id", {length: 200}).notNull(),
-    country: varchar("country", {length: 100}).notNull(),
-    bitableRecordId: varchar("bitable_record_id", {length: 200}).notNull(),
+    pluginInstanceId: varchar("plugin_instance_id", { length: 200 }).notNull(),
+    country: varchar("country", { length: 100 }).notNull(),
+    bitableRecordId: varchar("bitable_record_id", { length: 200 }).notNull(),
     /**
      * @type { [key: string]: unknown }
      */
     rawData: jsonb("raw_data").notNull(),
-    createdAt: customTimestamptz("_created_at", {precision: 3}).notNull().default(sql`CURRENT_TIMESTAMP`),
+    createdAt: customTimestamptz("_created_at", { precision: 3 }).notNull().default(sql`CURRENT_TIMESTAMP`),
     createdBy: userProfile("_created_by").default(sql`CASE
     WHEN (current_setting('app.user_id'::text, true) = ''::text) THEN NULL`),
-    updatedAt: customTimestamptz("_updated_at", {precision: 3}).notNull().default(sql`CURRENT_TIMESTAMP`),
+    updatedAt: customTimestamptz("_updated_at", { precision: 3 }).notNull().default(sql`CURRENT_TIMESTAMP`),
     updatedBy: userProfile("_updated_by").default(sql`CASE
     WHEN (current_setting('app.user_id'::text, true) = ''::text) THEN NULL`),
 }, (table) => [
@@ -304,22 +279,22 @@ export const bitableDataBackup = pgTable("bitable_data_backup", {
 
 export const creativeAssetRegistry = pgTable("creative_asset_registry", {
     id: uuid("id").primaryKey().defaultRandom(),
-    identityCardId: varchar("identity_card_id", {length: 200}),
+    identityCardId: varchar("identity_card_id", { length: 200 }),
     director: text("director"),
     functionName: text("function_name"),
     requirement: text("requirement"),
     painPoint: text("pain_point"),
     molecule: text("molecule"),
-    productionType: varchar("production_type", {length: 100}),
-    hookType: varchar("hook_type", {length: 100}),
+    productionType: varchar("production_type", { length: 100 }),
+    hookType: varchar("hook_type", { length: 100 }),
     openingScene: text("opening_scene"),
     validElements: text("valid_elements"),
     validLocations: text("valid_locations"),
     scriptTags: text("script_tags"),
-    sourceTableId: varchar("source_table_id", {length: 100}),
-    bitableRecordId: varchar("bitable_record_id", {length: 100}),
-    country: varchar("country", {length: 50}),
-    sourceTable: varchar("source_table", {length: 100}),
+    sourceTableId: varchar("source_table_id", { length: 100 }),
+    bitableRecordId: varchar("bitable_record_id", { length: 100 }),
+    country: varchar("country", { length: 50 }),
+    sourceTable: varchar("source_table", { length: 100 }),
     lateEditor: text("late_editor"),
     cachedCost: numeric("cached_cost"),
     cachedClicks: numeric("cached_clicks"),
@@ -330,15 +305,16 @@ export const creativeAssetRegistry = pgTable("creative_asset_registry", {
     cachedPlayCount: numeric("cached_play_count"),
     cachedPlayComplete: numeric("cached_play_complete"),
     cachedAvgVideoPlayDuration: numeric("cached_avg_video_play_duration"),
-    productionStatus: varchar("production_status", {length: 100}),
-    newOrActive: varchar("new_or_active", {length: 100}),
-    materialType: varchar("material_type", {length: 100}),
-    productionDate: varchar("production_date", {length: 50}),
-    auditStatus: varchar("audit_status", {length: 50}),
+    productionStatus: varchar("production_status", { length: 100 }),
+    newOrActive: varchar("new_or_active", { length: 100 }),
+    materialType: varchar("material_type", { length: 100 }),
+    productionDate: varchar("production_date", { length: 50 }),
+    auditStatus: varchar("audit_status", { length: 50 }),
     finalName: text("final_name"),
-    createdAt: customTimestamptz("_created_at", {precision: 6}).notNull().default(sql`CURRENT_TIMESTAMP`),
+    rejectionReason: text("rejection_reason"),
+    createdAt: customTimestamptz("_created_at", { precision: 6 }).notNull().default(sql`CURRENT_TIMESTAMP`),
     createdBy: userProfile("_created_by"),
-    updatedAt: customTimestamptz("_updated_at", {precision: 6}).notNull().default(sql`CURRENT_TIMESTAMP`),
+    updatedAt: customTimestamptz("_updated_at", { precision: 6 }).notNull().default(sql`CURRENT_TIMESTAMP`),
     updatedBy: userProfile("_updated_by"),
 }, (table) => [
     index("idx_registry_identity_card_id").on(table.identityCardId),
@@ -349,25 +325,26 @@ export const creativeAssetRegistry = pgTable("creative_asset_registry", {
 
 export const creativeAssetsExport = pgTable("creative_assets_export", {
     id: uuid("id").primaryKey().defaultRandom(),
-    timeRange: varchar("time_range", {length: 200}),
-    creativeName: varchar("creative_name", {length: 500}),
-    createdTime: varchar("created_time", {length: 100}),
-    creativeSource: varchar("creative_source", {length: 200}),
-    country: varchar("country", {length: 100}),
-    placement: varchar("placement", {length: 200}),
+    timeRange: varchar("time_range", { length: 200 }),
+    creativeName: varchar("creative_name", { length: 500 }),
+    createdTime: varchar("created_time", { length: 100 }),
+    creativeSource: varchar("creative_source", { length: 200 }),
+    country: varchar("country", { length: 100 }),
+    placement: varchar("placement", { length: 200 }),
     relatedAdCount: integer("related_ad_count").default(0),
     cost: numeric("cost").default('0'),
     cpm: numeric("cpm").default('0'),
     impressions: integer("impressions").default(0),
     clicksLandingPage: integer("clicks_landing_page").default(0),
     ctrLandingPage: numeric("ctr_landing_page").default('0'),
-    cleanedMaterialName: varchar("cleaned_material_name", {length: 500}),
-    materialDate: varchar("material_date", {length: 100}),
-    zeroCostFlag: varchar("zero_cost_flag", {length: 50}),
-    createdAt: customTimestamptz("_created_at", {precision: 3}).notNull().default(sql`CURRENT_TIMESTAMP`),
+    cleanedMaterialName: varchar("cleaned_material_name", { length: 500 }),
+    materialDate: varchar("material_date", { length: 100 }),
+    zeroCostFlag: varchar("zero_cost_flag", { length: 50 }),
+    firstCostDate: varchar("first_cost_date", { length: 20 }),
+    createdAt: customTimestamptz("_created_at", { precision: 3 }).notNull().default(sql`CURRENT_TIMESTAMP`),
     createdBy: userProfile("_created_by").default(sql`CASE
     WHEN (current_setting('app.user_id'::text, true) = ''::text) THEN NULL`),
-    updatedAt: customTimestamptz("_updated_at", {precision: 3}).notNull().default(sql`CURRENT_TIMESTAMP`),
+    updatedAt: customTimestamptz("_updated_at", { precision: 3 }).notNull().default(sql`CURRENT_TIMESTAMP`),
     updatedBy: userProfile("_updated_by").default(sql`CASE
     WHEN (current_setting('app.user_id'::text, true) = ''::text) THEN NULL`),
 }, (table) => [
@@ -379,19 +356,19 @@ export const creativeAssetsExport = pgTable("creative_assets_export", {
 
 export const ncaSourceData = pgTable("nca_source_data", {
     id: uuid("id").primaryKey().defaultRandom(),
-    sourceDate: varchar("source_date", {length: 50}).notNull(),
-    campaignId: varchar("campaign_id", {length: 200}),
-    reportingAdId: varchar("reporting_ad_id", {length: 200}),
-    reportingTemplateCreativeId: varchar("reporting_template_creative_id", {length: 200}),
-    advertiserId: varchar("advertiser_id", {length: 200}),
+    sourceDate: varchar("source_date", { length: 50 }).notNull(),
+    campaignId: varchar("campaign_id", { length: 200 }),
+    reportingAdId: varchar("reporting_ad_id", { length: 200 }),
+    reportingTemplateCreativeId: varchar("reporting_template_creative_id", { length: 200 }),
+    advertiserId: varchar("advertiser_id", { length: 200 }),
     ncaCpa: numeric("nca_cpa").default('0'),
     newUserActivated: integer("new_user_activated").default(0),
     paidAdCost: numeric("paid_ad_cost").default('0'),
-    campaignName: varchar("campaign_name", {length: 500}),
-    createdAt: customTimestamptz("_created_at", {precision: 3}).notNull().default(sql`CURRENT_TIMESTAMP`),
+    campaignName: varchar("campaign_name", { length: 500 }),
+    createdAt: customTimestamptz("_created_at", { precision: 3 }).notNull().default(sql`CURRENT_TIMESTAMP`),
     createdBy: userProfile("_created_by").default(sql`CASE
     WHEN (current_setting('app.user_id'::text, true) = ''::text) THEN NULL`),
-    updatedAt: customTimestamptz("_updated_at", {precision: 3}).notNull().default(sql`CURRENT_TIMESTAMP`),
+    updatedAt: customTimestamptz("_updated_at", { precision: 3 }).notNull().default(sql`CURRENT_TIMESTAMP`),
     updatedBy: userProfile("_updated_by").default(sql`CASE
     WHEN (current_setting('app.user_id'::text, true) = ''::text) THEN NULL`),
 }, (table) => [
@@ -403,12 +380,12 @@ export const ncaSourceData = pgTable("nca_source_data", {
 export const tableView = pgTable("table_view", {
     id: uuid("id").primaryKey().defaultRandom(),
     ownerUid: userProfile("owner_uid").notNull(),
-    name: varchar("name", {length: 100}).notNull().unique(),
+    name: varchar("name", { length: 100 }).notNull().unique(),
     fields: text("fields").notNull(),
-    createdAt: customTimestamptz("_created_at", {precision: 3}).notNull().default(sql`CURRENT_TIMESTAMP`),
+    createdAt: customTimestamptz("_created_at", { precision: 3 }).notNull().default(sql`CURRENT_TIMESTAMP`),
     createdBy: userProfile("_created_by").default(sql`CASE
     WHEN (current_setting('app.user_id'::text, true) = ''::text) THEN NULL`),
-    updatedAt: customTimestamptz("_updated_at", {precision: 3}).notNull().default(sql`CURRENT_TIMESTAMP`),
+    updatedAt: customTimestamptz("_updated_at", { precision: 3 }).notNull().default(sql`CURRENT_TIMESTAMP`),
     updatedBy: userProfile("_updated_by").default(sql`CASE
     WHEN (current_setting('app.user_id'::text, true) = ''::text) THEN NULL`),
 }, (table) => [
@@ -418,12 +395,12 @@ export const tableView = pgTable("table_view", {
 export const userPreferences = pgTable("user_preferences", {
     id: uuid("id").primaryKey().defaultRandom(),
     ownerUid: userProfile("owner_uid").notNull(),
-    preferenceKey: varchar("preference_key", {length: 100}).notNull().unique(),
+    preferenceKey: varchar("preference_key", { length: 100 }).notNull().unique(),
     preferenceValue: text("preference_value"),
-    createdAt: customTimestamptz("_created_at", {precision: 3}).notNull().default(sql`CURRENT_TIMESTAMP`),
+    createdAt: customTimestamptz("_created_at", { precision: 3 }).notNull().default(sql`CURRENT_TIMESTAMP`),
     createdBy: userProfile("_created_by").default(sql`CASE
     WHEN (current_setting('app.user_id'::text, true) = ''::text) THEN NULL`),
-    updatedAt: customTimestamptz("_updated_at", {precision: 3}).notNull().default(sql`CURRENT_TIMESTAMP`),
+    updatedAt: customTimestamptz("_updated_at", { precision: 3 }).notNull().default(sql`CURRENT_TIMESTAMP`),
     updatedBy: userProfile("_updated_by").default(sql`CASE
     WHEN (current_setting('app.user_id'::text, true) = ''::text) THEN NULL`),
 }, (table) => [
@@ -439,16 +416,16 @@ export const dataSourceDetail = pgTable("data_source_detail", {
     play2s: integer("play_2s").default(0),
     play5s: integer("play_5s").default(0),
     playComplete: integer("play_complete").default(0),
-    materialNameClean: varchar("material_name_clean", {length: 500}),
-    audienceType: varchar("audience_type", {length: 100}),
-    bcType: varchar("bc_type", {length: 50}),
+    materialNameClean: varchar("material_name_clean", { length: 500 }),
+    audienceType: varchar("audience_type", { length: 100 }),
+    bcType: varchar("bc_type", { length: 50 }),
     videoCompleteRate: numeric("video_complete_rate"),
     avgVideoPlayDuration: numeric("avg_video_play_duration"),
-    dataSource: varchar("data_source", {length: 50}).notNull().default('promote'),
-    createdAt: customTimestamptz("_created_at", {precision: 3}).notNull().default(sql`CURRENT_TIMESTAMP`),
+    dataSource: varchar("data_source", { length: 50 }).notNull().default('promote'),
+    createdAt: customTimestamptz("_created_at", { precision: 3 }).notNull().default(sql`CURRENT_TIMESTAMP`),
     createdBy: userProfile("_created_by").default(sql`CASE
     WHEN (current_setting('app.user_id'::text, true) = ''::text) THEN NULL`),
-    updatedAt: customTimestamptz("_updated_at", {precision: 3}).notNull().default(sql`CURRENT_TIMESTAMP`),
+    updatedAt: customTimestamptz("_updated_at", { precision: 3 }).notNull().default(sql`CURRENT_TIMESTAMP`),
     updatedBy: userProfile("_updated_by").default(sql`CASE
     WHEN (current_setting('app.user_id'::text, true) = ''::text) THEN NULL`),
 }, (table) => [
@@ -458,42 +435,44 @@ export const dataSourceDetail = pgTable("data_source_detail", {
 
 export const dataSource = pgTable("data_source", {
     id: uuid("id").primaryKey().defaultRandom(),
-    seriesName: varchar("series_name", {length: 500}).notNull(),
-    recordDate: varchar("record_date", {length: 50}).notNull(),
-    adGroupName: varchar("ad_group_name", {length: 500}),
-    creativeName: varchar("creative_name", {length: 500}),
+    seriesName: varchar("series_name", { length: 500 }).notNull(),
+    recordDate: varchar("record_date", { length: 50 }).notNull(),
+    adGroupName: varchar("ad_group_name", { length: 500 }),
+    creativeName: varchar("creative_name", { length: 500 }),
     cost: numeric("cost").notNull().default('0'),
     impressions: integer("impressions").notNull().default(0),
     clicks: integer("clicks").notNull().default(0),
     conversions: integer("conversions").notNull().default(0),
-    country: varchar("country", {length: 100}),
-    materialType: varchar("material_type", {length: 100}),
-    placement: varchar("placement", {length: 100}),
-    agent: varchar("agent", {length: 100}),
-    dateValue: varchar("date_value", {length: 20}),
-    materialCategory: varchar("material_category", {length: 100}),
-    newOrActive: varchar("new_or_active", {length: 50}),
-    adGroupId: varchar("ad_group_id", {length: 200}),
-    adName: varchar("ad_name", {length: 500}),
-    adId: varchar("ad_id", {length: 200}),
-    creativeId: varchar("creative_id", {length: 200}),
-    videoMaterialId: varchar("video_material_id", {length: 200}),
-    cleanedMaterialName: varchar("cleaned_material_name", {length: 500}),
+    country: varchar("country", { length: 100 }),
+    materialType: varchar("material_type", { length: 100 }),
+    placement: varchar("placement", { length: 100 }),
+    agent: varchar("agent", { length: 100 }),
+    dateValue: varchar("date_value", { length: 20 }),
+    materialCategory: varchar("material_category", { length: 100 }),
+    newOrActive: varchar("new_or_active", { length: 50 }),
+    adGroupId: varchar("ad_group_id", { length: 200 }),
+    adName: varchar("ad_name", { length: 500 }),
+    adId: varchar("ad_id", { length: 200 }),
+    creativeId: varchar("creative_id", { length: 200 }),
+    videoMaterialId: varchar("video_material_id", { length: 200 }),
+    cleanedMaterialName: varchar("cleaned_material_name", { length: 500 }),
     newUserActivated: integer("new_user_activated").default(0),
-    placer: varchar("placer", {length: 100}),
-    bidType: varchar("bid_type", {length: 50}),
-    materialDirection: varchar("material_direction", {length: 100}),
-    bcDirection: varchar("bc_direction", {length: 50}),
-    materialDate: varchar("material_date", {length: 50}),
-    secondaryCategory: varchar("secondary_category", {length: 100}),
-    tertiaryCategory: varchar("tertiary_category", {length: 100}),
-    creativeIdentityId: varchar("creative_identity_id", {length: 200}),
-    dataSource: varchar("data_source", {length: 50}).notNull().default('promote'),
-    campaignId: varchar("campaign_id", {length: 200}),
-    createdAt: customTimestamptz("_created_at", {precision: 3}).notNull().default(sql`CURRENT_TIMESTAMP`),
+    placer: varchar("placer", { length: 100 }),
+    bidType: varchar("bid_type", { length: 50 }),
+    materialDirection: varchar("material_direction", { length: 100 }),
+    bcDirection: varchar("bc_direction", { length: 50 }),
+    materialDate: varchar("material_date", { length: 50 }),
+    secondaryCategory: varchar("secondary_category", { length: 100 }),
+    tertiaryCategory: varchar("tertiary_category", { length: 100 }),
+    creativeIdentityId: varchar("creative_identity_id", { length: 200 }),
+    dataSource: varchar("data_source", { length: 50 }).notNull().default('promote'),
+    campaignId: varchar("campaign_id", { length: 200 }),
+    timeSlot: varchar("time_slot", { length: 10 }),
+    groupName: varchar("group_name", { length: 100 }),
+    createdAt: customTimestamptz("_created_at", { precision: 3 }).notNull().default(sql`CURRENT_TIMESTAMP`),
     createdBy: userProfile("_created_by").default(sql`CASE
     WHEN (current_setting('app.user_id'::text, true) = ''::text) THEN NULL`),
-    updatedAt: customTimestamptz("_updated_at", {precision: 3}).notNull().default(sql`CURRENT_TIMESTAMP`),
+    updatedAt: customTimestamptz("_updated_at", { precision: 3 }).notNull().default(sql`CURRENT_TIMESTAMP`),
     updatedBy: userProfile("_updated_by").default(sql`CASE
     WHEN (current_setting('app.user_id'::text, true) = ''::text) THEN NULL`),
 }, (table) => [
@@ -511,19 +490,21 @@ export const dataSource = pgTable("data_source", {
 
 export const uploadRecord = pgTable("upload_record", {
     id: uuid("id").primaryKey().defaultRandom(),
-    fileName: varchar("file_name", {length: 500}).notNull(),
+    fileName: varchar("file_name", { length: 500 }).notNull(),
     filePath: text("file_path"),
-    status: varchar("status", {length: 20}).notNull().default('processing'),
+    status: varchar("status", { length: 20 }).notNull().default('processing'),
     totalRows: integer("total_rows").default(0),
     validRows: integer("valid_rows").default(0),
     errorMessage: text("error_message"),
-    dataDateStart: varchar("data_date_start", {length: 20}),
-    dataDateEnd: varchar("data_date_end", {length: 20}),
-    processedAt: varchar("processed_at", {length: 50}),
-    createdAt: customTimestamptz("_created_at", {precision: 3}).notNull().default(sql`CURRENT_TIMESTAMP`),
+    dataDateStart: varchar("data_date_start", { length: 20 }),
+    dataDateEnd: varchar("data_date_end", { length: 20 }),
+    resultPayload: text("result_payload"),
+    batchKey: text("batch_key"),
+    processedAt: varchar("processed_at", { length: 50 }),
+    createdAt: customTimestamptz("_created_at", { precision: 3 }).notNull().default(sql`CURRENT_TIMESTAMP`),
     createdBy: userProfile("_created_by").default(sql`CASE
     WHEN (current_setting('app.user_id'::text, true) = ''::text) THEN NULL`),
-    updatedAt: customTimestamptz("_updated_at", {precision: 3}).notNull().default(sql`CURRENT_TIMESTAMP`),
+    updatedAt: customTimestamptz("_updated_at", { precision: 3 }).notNull().default(sql`CURRENT_TIMESTAMP`),
     updatedBy: userProfile("_updated_by").default(sql`CASE
     WHEN (current_setting('app.user_id'::text, true) = ''::text) THEN NULL`),
 }, (table) => [
@@ -532,17 +513,17 @@ export const uploadRecord = pgTable("upload_record", {
 
 export const dataBackup = pgTable("data_backup", {
     id: uuid("id").primaryKey().defaultRandom(),
-    batchId: varchar("batch_id", {length: 100}).notNull(),
-    backupDate: varchar("backup_date", {length: 20}).notNull(),
-    dataDateStart: varchar("data_date_start", {length: 20}),
-    dataDateEnd: varchar("data_date_end", {length: 20}),
+    batchId: varchar("batch_id", { length: 100 }).notNull(),
+    backupDate: varchar("backup_date", { length: 20 }).notNull(),
+    dataDateStart: varchar("data_date_start", { length: 20 }),
+    dataDateEnd: varchar("data_date_end", { length: 20 }),
     rowCount: integer("row_count").default(0),
-    status: varchar("status", {length: 20}).notNull().default('active'),
+    status: varchar("status", { length: 20 }).notNull().default('active'),
     dataSnapshot: text("data_snapshot"),
-    createdAt: customTimestamptz("_created_at", {precision: 3}).notNull().default(sql`CURRENT_TIMESTAMP`),
+    createdAt: customTimestamptz("_created_at", { precision: 3 }).notNull().default(sql`CURRENT_TIMESTAMP`),
     createdBy: userProfile("_created_by").default(sql`CASE
     WHEN (current_setting('app.user_id'::text, true) = ''::text) THEN NULL`),
-    updatedAt: customTimestamptz("_updated_at", {precision: 3}).notNull().default(sql`CURRENT_TIMESTAMP`),
+    updatedAt: customTimestamptz("_updated_at", { precision: 3 }).notNull().default(sql`CURRENT_TIMESTAMP`),
     updatedBy: userProfile("_updated_by").default(sql`CASE
     WHEN (current_setting('app.user_id'::text, true) = ''::text) THEN NULL`),
 }, (table) => [
@@ -560,15 +541,15 @@ export const adRecordDetail = pgTable("ad_record_detail", {
     play2s: integer("play_2s").default(0),
     play5s: integer("play_5s").default(0),
     playComplete: integer("play_complete").default(0),
-    materialNameClean: varchar("material_name_clean", {length: 500}),
-    audienceType: varchar("audience_type", {length: 100}),
-    bcType: varchar("bc_type", {length: 50}),
+    materialNameClean: varchar("material_name_clean", { length: 500 }),
+    audienceType: varchar("audience_type", { length: 100 }),
+    bcType: varchar("bc_type", { length: 50 }),
     videoCompleteRate: numeric("video_complete_rate"),
     avgVideoPlayDuration: numeric("avg_video_play_duration"),
-    createdAt: customTimestamptz("_created_at", {precision: 3}).notNull().default(sql`CURRENT_TIMESTAMP`),
+    createdAt: customTimestamptz("_created_at", { precision: 3 }).notNull().default(sql`CURRENT_TIMESTAMP`),
     createdBy: userProfile("_created_by").default(sql`CASE
     WHEN (current_setting('app.user_id'::text, true) = ''::text) THEN NULL`),
-    updatedAt: customTimestamptz("_updated_at", {precision: 3}).notNull().default(sql`CURRENT_TIMESTAMP`),
+    updatedAt: customTimestamptz("_updated_at", { precision: 3 }).notNull().default(sql`CURRENT_TIMESTAMP`),
     updatedBy: userProfile("_updated_by").default(sql`CASE
     WHEN (current_setting('app.user_id'::text, true) = ''::text) THEN NULL`),
 }, (table) => [
@@ -577,33 +558,33 @@ export const adRecordDetail = pgTable("ad_record_detail", {
 
 export const adRecord = pgTable("ad_record", {
     id: uuid("id").primaryKey().defaultRandom(),
-    seriesName: varchar("series_name", {length: 500}).notNull(),
-    recordDate: varchar("record_date", {length: 50}).notNull(),
-    adGroupName: varchar("ad_group_name", {length: 500}),
-    creativeName: varchar("creative_name", {length: 500}),
+    seriesName: varchar("series_name", { length: 500 }).notNull(),
+    recordDate: varchar("record_date", { length: 50 }).notNull(),
+    adGroupName: varchar("ad_group_name", { length: 500 }),
+    creativeName: varchar("creative_name", { length: 500 }),
     cost: numeric("cost").notNull().default('0'),
     impressions: integer("impressions").notNull().default(0),
     clicks: integer("clicks").notNull().default(0),
     conversions: integer("conversions").notNull().default(0),
-    country: varchar("country", {length: 100}),
-    materialType: varchar("material_type", {length: 100}),
-    placement: varchar("placement", {length: 100}),
-    agent: varchar("agent", {length: 100}),
-    dateValue: varchar("date_value", {length: 20}),
-    materialCategory: varchar("material_category", {length: 100}),
-    newOrActive: varchar("new_or_active", {length: 50}),
-    accountName: varchar("account_name", {length: 500}),
-    accountId: varchar("account_id", {length: 200}),
-    seriesId: varchar("series_id", {length: 200}),
-    adGroupId: varchar("ad_group_id", {length: 200}),
-    adName: varchar("ad_name", {length: 500}),
-    adId: varchar("ad_id", {length: 200}),
-    creativeId: varchar("creative_id", {length: 200}),
-    videoMaterialId: varchar("video_material_id", {length: 200}),
-    createdAt: customTimestamptz("_created_at", {precision: 3}).notNull().default(sql`CURRENT_TIMESTAMP`),
+    country: varchar("country", { length: 100 }),
+    materialType: varchar("material_type", { length: 100 }),
+    placement: varchar("placement", { length: 100 }),
+    agent: varchar("agent", { length: 100 }),
+    dateValue: varchar("date_value", { length: 20 }),
+    materialCategory: varchar("material_category", { length: 100 }),
+    newOrActive: varchar("new_or_active", { length: 50 }),
+    accountName: varchar("account_name", { length: 500 }),
+    accountId: varchar("account_id", { length: 200 }),
+    seriesId: varchar("series_id", { length: 200 }),
+    adGroupId: varchar("ad_group_id", { length: 200 }),
+    adName: varchar("ad_name", { length: 500 }),
+    adId: varchar("ad_id", { length: 200 }),
+    creativeId: varchar("creative_id", { length: 200 }),
+    videoMaterialId: varchar("video_material_id", { length: 200 }),
+    createdAt: customTimestamptz("_created_at", { precision: 3 }).notNull().default(sql`CURRENT_TIMESTAMP`),
     createdBy: userProfile("_created_by").default(sql`CASE
     WHEN (current_setting('app.user_id'::text, true) = ''::text) THEN NULL`),
-    updatedAt: customTimestamptz("_updated_at", {precision: 3}).notNull().default(sql`CURRENT_TIMESTAMP`),
+    updatedAt: customTimestamptz("_updated_at", { precision: 3 }).notNull().default(sql`CURRENT_TIMESTAMP`),
     updatedBy: userProfile("_updated_by").default(sql`CASE
     WHEN (current_setting('app.user_id'::text, true) = ''::text) THEN NULL`),
 }, (table) => [
@@ -617,12 +598,12 @@ export const adRecord = pgTable("ad_record", {
 
 export const appFavorite = pgTable("app_favorite", {
     id: uuid("id").primaryKey().defaultRandom(),
-    appId: varchar("app_id", {length: 255}).notNull().unique(),
+    appId: varchar("app_id", { length: 255 }).notNull().unique(),
     ownerUid: userProfile("owner_uid").notNull(),
-    createdAt: customTimestamptz("_created_at", {precision: 3}).notNull().default(sql`CURRENT_TIMESTAMP`),
+    createdAt: customTimestamptz("_created_at", { precision: 3 }).notNull().default(sql`CURRENT_TIMESTAMP`),
     createdBy: userProfile("_created_by").default(sql`CASE
     WHEN (current_setting('app.user_id'::text, true) = ''::text) THEN NULL`),
-    updatedAt: customTimestamptz("_updated_at", {precision: 3}).notNull().default(sql`CURRENT_TIMESTAMP`),
+    updatedAt: customTimestamptz("_updated_at", { precision: 3 }).notNull().default(sql`CURRENT_TIMESTAMP`),
     updatedBy: userProfile("_updated_by").default(sql`CASE
     WHEN (current_setting('app.user_id'::text, true) = ''::text) THEN NULL`),
 }, (table) => [
@@ -632,19 +613,19 @@ export const appFavorite = pgTable("app_favorite", {
 
 export const template = pgTable("template", {
     id: uuid("id").primaryKey().defaultRandom(),
-    name: varchar("name", {length: 255}).notNull(),
-    category: varchar("category", {length: 50}).notNull().default('tool'),
+    name: varchar("name", { length: 255 }).notNull(),
+    category: varchar("category", { length: 50 }).notNull().default('tool'),
     description: text("description"),
     coverImage: text("cover_image"),
     structure: text("structure"),
     usageCount: integer("usage_count").notNull().default(0),
     isCustom: boolean("is_custom").notNull().default(false),
-    sourceAppId: varchar("source_app_id", {length: 255}),
+    sourceAppId: varchar("source_app_id", { length: 255 }),
     creator: userProfile("creator"),
-    createdAt: customTimestamptz("_created_at", {precision: 3}).notNull().default(sql`CURRENT_TIMESTAMP`),
+    createdAt: customTimestamptz("_created_at", { precision: 3 }).notNull().default(sql`CURRENT_TIMESTAMP`),
     createdBy: userProfile("_created_by").default(sql`CASE
     WHEN (current_setting('app.user_id'::text, true) = ''::text) THEN NULL`),
-    updatedAt: customTimestamptz("_updated_at", {precision: 3}).notNull().default(sql`CURRENT_TIMESTAMP`),
+    updatedAt: customTimestamptz("_updated_at", { precision: 3 }).notNull().default(sql`CURRENT_TIMESTAMP`),
     updatedBy: userProfile("_updated_by").default(sql`CASE
     WHEN (current_setting('app.user_id'::text, true) = ''::text) THEN NULL`),
 }, (table) => [
@@ -654,14 +635,14 @@ export const template = pgTable("template", {
 
 export const appApiStat = pgTable("app_api_stat", {
     id: uuid("id").primaryKey().defaultRandom(),
-    appId: varchar("app_id", {length: 255}).notNull(),
-    statDate: varchar("stat_date", {length: 20}).notNull(),
+    appId: varchar("app_id", { length: 255 }).notNull(),
+    statDate: varchar("stat_date", { length: 20 }).notNull(),
     callCount: integer("call_count").notNull().default(0),
     avgResponseTime: integer("avg_response_time").notNull().default(0),
-    createdAt: customTimestamptz("_created_at", {precision: 3}).notNull().default(sql`CURRENT_TIMESTAMP`),
+    createdAt: customTimestamptz("_created_at", { precision: 3 }).notNull().default(sql`CURRENT_TIMESTAMP`),
     createdBy: userProfile("_created_by").default(sql`CASE
     WHEN (current_setting('app.user_id'::text, true) = ''::text) THEN NULL`),
-    updatedAt: customTimestamptz("_updated_at", {precision: 3}).notNull().default(sql`CURRENT_TIMESTAMP`),
+    updatedAt: customTimestamptz("_updated_at", { precision: 3 }).notNull().default(sql`CURRENT_TIMESTAMP`),
     updatedBy: userProfile("_updated_by").default(sql`CASE
     WHEN (current_setting('app.user_id'::text, true) = ''::text) THEN NULL`),
 }, (table) => [
@@ -670,13 +651,13 @@ export const appApiStat = pgTable("app_api_stat", {
 
 export const appVisitStat = pgTable("app_visit_stat", {
     id: uuid("id").primaryKey().defaultRandom(),
-    appId: varchar("app_id", {length: 255}).notNull(),
-    statDate: varchar("stat_date", {length: 20}).notNull(),
+    appId: varchar("app_id", { length: 255 }).notNull(),
+    statDate: varchar("stat_date", { length: 20 }).notNull(),
     visitCount: integer("visit_count").notNull().default(0),
-    createdAt: customTimestamptz("_created_at", {precision: 3}).notNull().default(sql`CURRENT_TIMESTAMP`),
+    createdAt: customTimestamptz("_created_at", { precision: 3 }).notNull().default(sql`CURRENT_TIMESTAMP`),
     createdBy: userProfile("_created_by").default(sql`CASE
     WHEN (current_setting('app.user_id'::text, true) = ''::text) THEN NULL`),
-    updatedAt: customTimestamptz("_updated_at", {precision: 3}).notNull().default(sql`CURRENT_TIMESTAMP`),
+    updatedAt: customTimestamptz("_updated_at", { precision: 3 }).notNull().default(sql`CURRENT_TIMESTAMP`),
     updatedBy: userProfile("_updated_by").default(sql`CASE
     WHEN (current_setting('app.user_id'::text, true) = ''::text) THEN NULL`),
 }, (table) => [
@@ -685,14 +666,14 @@ export const appVisitStat = pgTable("app_visit_stat", {
 
 export const appFeedback = pgTable("app_feedback", {
     id: uuid("id").primaryKey().defaultRandom(),
-    appId: varchar("app_id", {length: 255}).notNull(),
+    appId: varchar("app_id", { length: 255 }).notNull(),
     rating: integer("rating").notNull().default(5),
     comment: text("comment"),
     submitter: userProfile("submitter"),
-    createdAt: customTimestamptz("_created_at", {precision: 3}).notNull().default(sql`CURRENT_TIMESTAMP`),
+    createdAt: customTimestamptz("_created_at", { precision: 3 }).notNull().default(sql`CURRENT_TIMESTAMP`),
     createdBy: userProfile("_created_by").default(sql`CASE
     WHEN (current_setting('app.user_id'::text, true) = ''::text) THEN NULL`),
-    updatedAt: customTimestamptz("_updated_at", {precision: 3}).notNull().default(sql`CURRENT_TIMESTAMP`),
+    updatedAt: customTimestamptz("_updated_at", { precision: 3 }).notNull().default(sql`CURRENT_TIMESTAMP`),
     updatedBy: userProfile("_updated_by").default(sql`CASE
     WHEN (current_setting('app.user_id'::text, true) = ''::text) THEN NULL`),
 }, (table) => [
@@ -701,15 +682,15 @@ export const appFeedback = pgTable("app_feedback", {
 
 export const docVersion = pgTable("doc_version", {
     id: uuid("id").primaryKey().defaultRandom(),
-    appId: varchar("app_id", {length: 255}).notNull(),
+    appId: varchar("app_id", { length: 255 }).notNull(),
     versionNumber: integer("version_number").notNull(),
     content: text("content"),
     changeSummary: text("change_summary"),
     editor: userProfile("editor"),
-    createdAt: customTimestamptz("_created_at", {precision: 3}).notNull().default(sql`CURRENT_TIMESTAMP`),
+    createdAt: customTimestamptz("_created_at", { precision: 3 }).notNull().default(sql`CURRENT_TIMESTAMP`),
     createdBy: userProfile("_created_by").default(sql`CASE
     WHEN (current_setting('app.user_id'::text, true) = ''::text) THEN NULL`),
-    updatedAt: customTimestamptz("_updated_at", {precision: 3}).notNull().default(sql`CURRENT_TIMESTAMP`),
+    updatedAt: customTimestamptz("_updated_at", { precision: 3 }).notNull().default(sql`CURRENT_TIMESTAMP`),
     updatedBy: userProfile("_updated_by").default(sql`CASE
     WHEN (current_setting('app.user_id'::text, true) = ''::text) THEN NULL`),
 }, (table) => [
@@ -718,14 +699,14 @@ export const docVersion = pgTable("doc_version", {
 
 export const appDocument = pgTable("app_document", {
     id: uuid("id").primaryKey().defaultRandom(),
-    appId: varchar("app_id", {length: 255}).notNull(),
+    appId: varchar("app_id", { length: 255 }).notNull(),
     content: text("content"),
     currentVersion: integer("current_version").notNull().default(0),
     lastEditor: userProfile("last_editor"),
-    createdAt: customTimestamptz("_created_at", {precision: 3}).notNull().default(sql`CURRENT_TIMESTAMP`),
+    createdAt: customTimestamptz("_created_at", { precision: 3 }).notNull().default(sql`CURRENT_TIMESTAMP`),
     createdBy: userProfile("_created_by").default(sql`CASE
     WHEN (current_setting('app.user_id'::text, true) = ''::text) THEN NULL`),
-    updatedAt: customTimestamptz("_updated_at", {precision: 3}).notNull().default(sql`CURRENT_TIMESTAMP`),
+    updatedAt: customTimestamptz("_updated_at", { precision: 3 }).notNull().default(sql`CURRENT_TIMESTAMP`),
     updatedBy: userProfile("_updated_by").default(sql`CASE
     WHEN (current_setting('app.user_id'::text, true) = ''::text) THEN NULL`),
 }, (table) => [
@@ -734,17 +715,17 @@ export const appDocument = pgTable("app_document", {
 
 export const appProject = pgTable("app_project", {
     id: uuid("id").primaryKey().defaultRandom(),
-    name: varchar("name", {length: 255}).notNull(),
-    type: varchar("type", {length: 50}).notNull().default('tool'),
+    name: varchar("name", { length: 255 }).notNull(),
+    type: varchar("type", { length: 50 }).notNull().default('tool'),
     description: text("description"),
-    status: varchar("status", {length: 50}).notNull().default('draft'),
+    status: varchar("status", { length: 50 }).notNull().default('draft'),
     thumbnail: text("thumbnail"),
     config: text("config"),
     owner: userProfile("owner"),
-    createdAt: customTimestamptz("_created_at", {precision: 3}).notNull().default(sql`CURRENT_TIMESTAMP`),
+    createdAt: customTimestamptz("_created_at", { precision: 3 }).notNull().default(sql`CURRENT_TIMESTAMP`),
     createdBy: userProfile("_created_by").default(sql`CASE
     WHEN (current_setting('app.user_id'::text, true) = ''::text) THEN NULL`),
-    updatedAt: customTimestamptz("_updated_at", {precision: 3}).notNull().default(sql`CURRENT_TIMESTAMP`),
+    updatedAt: customTimestamptz("_updated_at", { precision: 3 }).notNull().default(sql`CURRENT_TIMESTAMP`),
     updatedBy: userProfile("_updated_by").default(sql`CASE
     WHEN (current_setting('app.user_id'::text, true) = ''::text) THEN NULL`),
 }, (table) => [

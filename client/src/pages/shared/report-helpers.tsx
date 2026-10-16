@@ -9,8 +9,9 @@ import {Skeleton} from '@client/src/components/ui/skeleton';
 import {Empty, EmptyMedia, EmptyTitle} from '@client/src/components/ui/empty';
 import type {ReportBaseFields} from '@shared/api.interface';
 import {cn} from '@/lib/utils';
+import {measureColumnAutoFit} from '@client/src/utils/column-resize-dom';
 
-import {fmtInt, fmtRate, fmtCtr, fmtDateYMD} from '@shared/format-utils';
+import {fmtInt, fmtRate, fmtCtr, fmtDateYMD, fmtCost2} from '@shared/format-utils';
 
 export {fmtInt, fmtRate, fmtCtr, fmtDateYMD};
 
@@ -25,10 +26,11 @@ export const Th: React.FC<{
     style?: React.CSSProperties;
     resizable?: boolean;
     onResizeStart?: (clientX: number) => void;
+    onAutoFit?: (width: number) => void;
     sortable?: boolean;
     sortDirection?: SortDirection | null;
     onSort?: () => void;
-}> = ({children, className, style, resizable, onResizeStart, sortable, sortDirection, onSort}) => (
+}> = ({children, className, style, resizable, onResizeStart, onAutoFit, sortable, sortDirection, onSort}) => (
     <TableHead
         className={cn(
             'sticky top-0 z-10 bg-accent text-xs uppercase tracking-wider whitespace-nowrap text-left',
@@ -63,6 +65,15 @@ export const Th: React.FC<{
                     e.stopPropagation();
                     onResizeStart(e.clientX);
                 }}
+                onDoubleClick={(e: React.MouseEvent) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    if (!onAutoFit) return;
+                    const th = e.currentTarget.parentElement;
+                    const table = th?.closest('table');
+                    if (!th || !table) return;
+                    onAutoFit(measureColumnAutoFit(table, th));
+                }}
             />
         )}
     </TableHead>
@@ -74,12 +85,14 @@ export const Td: React.FC<{
     className?: string;
     title?: string;
     style?: React.CSSProperties;
-    onDoubleClick?: () => void;
-}> = ({children, mono, className, title, style, onDoubleClick}) => (
+    onDoubleClick?: React.MouseEventHandler<HTMLTableCellElement>;
+    onMouseEnter?: React.MouseEventHandler<HTMLTableCellElement>;
+}> = ({children, mono, className, title, style, onDoubleClick, onMouseEnter}) => (
     <TableCell
         title={title}
         onDoubleClick={onDoubleClick}
-        className={cn('bg-card', mono ? 'tabular-nums text-xs text-left' : 'text-xs text-left', className)}
+        onMouseEnter={onMouseEnter}
+        className={cn('bg-card overflow-hidden whitespace-nowrap text-ellipsis', mono ? 'tabular-nums text-xs text-left' : 'text-xs text-left', className)}
         style={{
             fontFamily:
                 '"Helvetica Neue", Helvetica, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", Arial, sans-serif',
@@ -120,18 +133,34 @@ export function MetricColumns({
                                   row,
                                   startIndex = 0,
                                   widths,
+                                  summary = false,
                               }: {
     row: ReportBaseFields;
     startIndex?: number;
     widths?: number[];
+    /** 汇总行场景：用 SummaryTd 渲染，使单元格底部固定 */
+    summary?: boolean;
 }) {
     const styleFor = (offset: number) =>
         widths
             ? {width: widths[startIndex + offset], maxWidth: widths[startIndex + offset]}
             : undefined;
+    if (summary) {
+        return (
+            <>
+                <SummaryTd mono style={styleFor(0)}>{fmtCost2(row.totalCost)}</SummaryTd>
+                <SummaryTd mono style={styleFor(1)}>{fmtInt(row.totalImpressions)}</SummaryTd>
+                <SummaryTd mono style={styleFor(2)}>{fmtInt(row.totalClicks)}</SummaryTd>
+                <SummaryTd mono style={styleFor(3)}>{fmtInt(row.totalConversions)}</SummaryTd>
+                <SummaryTd mono style={styleFor(4)}>{fmtRate(row.cpa)}</SummaryTd>
+                <SummaryTd mono style={styleFor(5)}>{fmtRate(row.cpm)}</SummaryTd>
+                <SummaryTd mono style={styleFor(6)}>{fmtCtr(row.ctr)}</SummaryTd>
+            </>
+        );
+    }
     return (
         <>
-            <Td mono style={styleFor(0)}>{fmtInt(row.totalCost)}</Td>
+            <Td mono style={styleFor(0)}>{fmtCost2(row.totalCost)}</Td>
             <Td mono style={styleFor(1)}>{fmtInt(row.totalImpressions)}</Td>
             <Td mono style={styleFor(2)}>{fmtInt(row.totalClicks)}</Td>
             <Td mono style={styleFor(3)}>{fmtInt(row.totalConversions)}</Td>
@@ -146,6 +175,7 @@ export function MetricHeaders({
                                   widths,
                                   startIndex,
                                   startResize,
+                                  setColumnWidth,
                                   colCount,
                                   sortField,
                                   sortOrder,
@@ -154,6 +184,7 @@ export function MetricHeaders({
     widths: number[];
     startIndex: number;
     startResize: (index: number, clientX: number) => void;
+    setColumnWidth?: (index: number, width: number) => void;
     colCount: number;
     sortField?: string | null;
     sortOrder?: SortDirection;
@@ -166,7 +197,13 @@ export function MetricHeaders({
             style: {width: widths[i], minWidth: widths[i]},
             resizable: i < colCount - 1,
             onResizeStart: i < colCount - 1 ? (x: number) => startResize(i, x) : undefined,
-        } as { style: React.CSSProperties; resizable?: boolean; onResizeStart?: (x: number) => void };
+            onAutoFit: setColumnWidth ? (w: number) => setColumnWidth(i, w) : undefined,
+        } as {
+            style: React.CSSProperties;
+            resizable?: boolean;
+            onResizeStart?: (x: number) => void;
+            onAutoFit?: (w: number) => void
+        };
     };
     return (
         <>

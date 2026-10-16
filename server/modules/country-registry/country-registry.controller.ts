@@ -4,16 +4,21 @@ import {
     Post,
     Patch,
     Delete,
+    Put,
     Param,
     Query,
     Body,
+    Req,
     HttpCode,
     HttpStatus,
     NotFoundException,
     BadRequestException,
     ConflictException,
 } from '@nestjs/common';
+// ✅ 删掉飞书 NeedLogin，改用项目自建的 Public 装饰器
+import {Public} from '@server/modules/auth/public.decorator';
 import {CountryRegistryService} from './country-registry.service';
+import {extractPostgresErrorCode} from '@server/common/utils/postgres-error';
 import type {
     CountryRegistryListResponse,
     CountryRegistryRow,
@@ -28,18 +33,13 @@ import type {
     CountryRegistryForceResetResponse,
 } from '@shared/api.interface';
 
-/** 从数据库错误对象中提取 PostgreSQL 错误码 */
-function extractPostgresErrorCode(err: unknown): string | undefined {
-    if (!err || typeof err !== 'object') return undefined;
-    const e = err as { code?: string; cause?: { code?: string } };
-    return e.code ?? e.cause?.code;
-}
-
 @Controller('api/country-registry')
 export class CountryRegistryController {
     constructor(private readonly service: CountryRegistryService) {
     }
 
+    // 列表查询：原本公开 → 保持公开
+    @Public()
     @Get()
     async list(
         @Query('page') page?: string,
@@ -55,21 +55,29 @@ export class CountryRegistryController {
         });
     }
 
+    // 活跃国家：原本公开 → 保持公开
+    // 注意：userId 从 req.user 取（JWT Guard 注入），不再是飞书 userContext
+    @Public()
     @Get('active')
-    async getActiveCountries(): Promise<CountryRegistryActiveResponse> {
+    async getActiveCountries(@Req() req: Request): Promise<CountryRegistryActiveResponse> {
+        const userId: string | undefined = (req as any).user?.userId;
         const [countries, pausedCountries] = await Promise.all([
-            this.service.getActiveCountries(),
+            this.service.getActiveCountries(userId),
             this.service.getPausedCountries(),
         ]);
         return {countries, pausedCountries};
     }
 
+    // 大区列表：原本公开 → 保持公开
+    @Public()
     @Get('regions')
     async getRegions(): Promise<{ regions: string[] }> {
         const regions = await this.service.getRegions();
         return {regions};
     }
 
+    // 报表国家列表：原本公开 → 保持公开
+    @Public()
     @Get('report-countries')
     async getReportCountries(): Promise<{
         countries: Array<{
@@ -80,17 +88,33 @@ export class CountryRegistryController {
             sortOrder: number;
             status: string;
             showInReports: boolean;
-        }>;
+            assessmentValue: string;
+            assessmentValueNew: string;
+            assessmentValueOct: string;
+        }>
     }> {
         const countries = await this.service.getReportCountries();
         return {countries};
     }
 
+    // 可见性列表：原本公开 → 保持公开
+    @Public()
     @Get('visibility')
     async getVisibility(): Promise<CountryRegistryVisibilityResponse> {
         return this.service.getVisibility();
     }
 
+    // 全部国家：原本公开 → 保持公开（注意：放在 :id 路由之前避免匹配冲突）
+    @Public()
+    @Get('all')
+    async getAllCountries(): Promise<{
+        countries: Array<{ code: string; name: string; region: string; status: string }>
+    }> {
+        const countries = await this.service.getAllCountries();
+        return {countries};
+    }
+
+    // 以下为写操作：全局 Guard 已保证登录，删掉 @NeedLogin()
     @Post()
     async create(@Body() dto: CountryRegistryCreateDto): Promise<CountryRegistryRow> {
         if (!dto.country || !dto.region || !dto.status) {
@@ -113,7 +137,10 @@ export class CountryRegistryController {
     ): Promise<CountryRegistryRow> {
         try {
             const result = await this.service.updateStatus(id, dto.status);
-            await this.service.resetAllUserSettingsForCountry(result.country, dto.status);
+            await this.service.resetAllUserSettingsForCountry(
+                result.country,
+                dto.status,
+            );
             return result;
         } catch (err) {
             if (err instanceof Error && err.message === 'NOT_FOUND') {
@@ -121,14 +148,6 @@ export class CountryRegistryController {
             }
             throw err;
         }
-    }
-
-    @Get('all')
-    async getAllCountries(): Promise<{
-        countries: Array<{ code: string; name: string; region: string; status: string }>;
-    }> {
-        const countries = await this.service.getAllCountries();
-        return {countries};
     }
 
     @Patch(':id')
@@ -147,9 +166,7 @@ export class CountryRegistryController {
     }
 
     @Post('batch-import')
-    async batchImport(
-        @Body() dto: CountryRegistryBatchImportDto,
-    ): Promise<CountryRegistryBatchImportResponse> {
+    async batchImport(@Body() dto: CountryRegistryBatchImportDto): Promise<CountryRegistryBatchImportResponse> {
         if (!dto.items || dto.items.length === 0) {
             throw new BadRequestException('导入数据不能为空');
         }

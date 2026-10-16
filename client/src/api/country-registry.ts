@@ -1,4 +1,5 @@
-import {apiClient} from '@client/src/utils/axios';
+// ✅ 删掉飞书 axiosForBackend，改用项目自建 apiClient（带 token 拦截 + 401 跳登录）
+import {apiClient} from '@/utils/axios';
 import type {
     CountryRegistryListParams,
     CountryRegistryListResponse,
@@ -11,8 +12,6 @@ import type {
     CountryRegistryVisibilityUpdateDto,
     CountryRegistryForceResetResponse,
 } from '@shared/api.interface';
-
-// ============ 国家收录 CRUD ============
 
 export function list(
     params: CountryRegistryListParams,
@@ -50,7 +49,7 @@ export function setVisibility(
     dto: CountryRegistryVisibilityUpdateDto,
 ): Promise<void> {
     return apiClient({
-        url: `/country-registry/${id}/visibility`,
+        url: `/api/country-registry/${id}/visibility`,
         method: 'PATCH',
         data: dto,
     }).then((res) => res.data);
@@ -71,7 +70,7 @@ export function update(
     dto: CountryRegistryUpdateDto,
 ): Promise<CountryRegistryRow> {
     return apiClient({
-        url: `/country-registry/${id}`,
+        url: `/api/country-registry/${id}`,
         method: 'PATCH',
         data: dto,
     }).then((res) => res.data);
@@ -79,7 +78,7 @@ export function update(
 
 export function remove(id: string): Promise<void> {
     return apiClient({
-        url: `/country-registry/${id}`,
+        url: `/api/country-registry/${id}`,
         method: 'DELETE',
     }).then((res) => res.data);
 }
@@ -96,13 +95,11 @@ export function changeStatus(
     dto: CountryRegistryStatusChangeDto,
 ): Promise<CountryRegistryRow> {
     return apiClient({
-        url: `/country-registry/${id}/status`,
+        url: `/api/country-registry/${id}/status`,
         method: 'PATCH',
         data: dto,
     }).then((res) => res.data);
 }
-
-// ============ 所有国家列表 ============
 
 export interface AllCountriesItem {
     code: string;
@@ -118,8 +115,6 @@ export function getAllCountries(): Promise<{ countries: AllCountriesItem[] }> {
     }).then((res) => res.data);
 }
 
-// ============ 报表国家列表（按大区分组、带颜色） ============
-
 export interface ReportCountryItem {
     code: string;
     name: string;
@@ -128,6 +123,9 @@ export interface ReportCountryItem {
     sortOrder: number;
     status: string;
     showInReports: boolean;
+    assessmentValue: string;
+    assessmentValueNew: string;
+    assessmentValueOct: string;
 }
 
 export function getReportCountries(): Promise<{ countries: ReportCountryItem[] }> {

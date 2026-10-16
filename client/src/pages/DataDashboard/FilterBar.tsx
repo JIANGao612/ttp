@@ -1,5 +1,5 @@
 import React, {useCallback, useEffect, useRef, useState} from 'react';
-import {ChevronDown, ChevronLeft, ChevronRight, RotateCcw, CalendarIcon, Search, X, RefreshCw} from 'lucide-react';
+import {ChevronDown, RotateCcw, Search, X, RefreshCw} from 'lucide-react';
 import {Button} from '@client/src/components/ui/button';
 import {Input} from '@client/src/components/ui/input';
 import {Checkbox} from '@client/src/components/ui/checkbox';
@@ -7,17 +7,14 @@ import {Popover, PopoverContent, PopoverTrigger} from '@client/src/components/ui
 import {ScrollArea} from '@client/src/components/ui/scroll-area';
 import {logger} from '@client/src/utils/logger';
 import {getFilterOptions} from '@client/src/api/ad-data';
+import {getGroupNames} from '@client/src/api/team-member-mapping';
 import type {AdDataFilterParams, FilterOptions} from '@shared/api.interface';
 import {cn} from '@/lib/utils';
-import {getDefaultFilters} from '../shared/default-date-range';
+import {getDefaultFilters, getTabDefaultDateRange} from '../shared/default-date-range';
 import {getCountryDisplayCode} from '@shared/country-utils';
-
-function formatLocalDate(d: Date): string {
-    const y = d.getFullYear();
-    const m = String(d.getMonth() + 1).padStart(2, '0');
-    const day = String(d.getDate()).padStart(2, '0');
-    return `${y}-${m}-${day}`;
-}
+import FilterRow from '@client/src/components/FilterRow';
+import KeywordSearchCombo, {type KeywordFieldOption} from '@client/src/components/KeywordSearchCombo';
+import {DateRangePicker} from '@client/src/components/date-range-picker';
 
 interface FilterBarProps {
     filters: AdDataFilterParams;
@@ -28,6 +25,24 @@ interface FilterBarProps {
     showProductionDate?: boolean;
     showYesterdayCostMin?: boolean;
     showRenovationStatus?: boolean;
+    /** 显示组别筛选（日报/时报页专用） */
+    showGroupFilter?: boolean;
+    /** 主筛选字段键白名单；提供时其余可见字段收进「更多筛选」折叠区，未提供则保持全部可见 */
+    primaryFields?: string[];
+    /** ID 搜索是否固定放主筛选区（默认 true；false 时按 primaryFields 白名单归位） */
+    idSearchPrimary?: boolean;
+    /** 主筛选区按 primaryFields 数组顺序排列（默认 false，保持字段定义顺序） */
+    orderPrimaryByList?: boolean;
+    /** 消耗日期筛选旁显示「恢复默认」按钮（近三天不含当天） */
+    showInvestTimeReset?: boolean;
+    /** 恢复默认按钮取哪个 tab 的默认范围 */
+    investTimeResetTab?: string;
+    /** 恢复默认点击后重置全部筛选为默认值（近七天 + 默认代理商） */
+    investTimeResetAll?: boolean;
+    /** 关键词搜索字段下拉选项；提供时在关键词旁显示「搜索字段」筛选 */
+    keywordFieldOptions?: KeywordFieldOption[];
+    /** 是否显示搜索字段筛选（隐藏时收入更多筛选之外） */
+    showKeywordFields?: boolean;
 }
 
 // -----------------------------------------------------------------------
@@ -230,733 +245,111 @@ const MultiSelect: React.FC<MultiSelectProps> = ({label, options, selected, onCh
 };
 
 // -----------------------------------------------------------------------
-// DateRangePicker — dual-month calendar with quick presets & confirm/cancel
-// -----------------------------------------------------------------------
-
-interface DateRangePickerProps {
-    startDate?: string;
-    endDate?: string;
-    onChange: (start: string | undefined, end: string | undefined) => void;
-}
-
-const PRESETS: { key: string; label: string }[] = [
-    {key: 'today', label: '今天'},
-    {key: 'yesterday', label: '昨天'},
-    {key: 'last7', label: '过去7天'},
-    {key: 'last14', label: '过去14天'},
-    {key: 'last30', label: '过去30天'},
-    {key: 'thisWeek', label: '本周'},
-    {key: 'lastWeek', label: '上周'},
-    {key: 'thisMonth', label: '本月'},
-    {key: 'lastMonth', label: '上个月'},
-];
-
-function getBeijingToday(): Date {
-    const now = new Date();
-    const beijingTime = new Date(now.getTime() + 8 * 60 * 60 * 1000);
-    const y = beijingTime.getUTCFullYear();
-    const m = beijingTime.getUTCMonth();
-    const d = beijingTime.getUTCDate();
-    return new Date(y, m, d);
-}
-
-function addMonths(date: Date, n: number): Date {
-    const d = new Date(date);
-    d.setMonth(d.getMonth() + n);
-    return d;
-}
-
-function startOfMonth(date: Date): Date {
-    return new Date(date.getFullYear(), date.getMonth(), 1);
-}
-
-function calcPresetRange(key: string): { from: Date; to: Date } {
-    const today = getBeijingToday();
-    const y = today.getFullYear();
-    const m = today.getMonth();
-    const d = today.getDate();
-    const dayOfWeek = today.getDay();
-
-    switch (key) {
-        case 'today':
-            return {from: today, to: today};
-        case 'yesterday': {
-            const yest = new Date(y, m, d - 1);
-            return {from: yest, to: yest};
-        }
-        case 'last7': {
-            const to = new Date(y, m, d - 1);
-            const from = new Date(y, m, d - 7);
-            return {from, to};
-        }
-        case 'last14': {
-            const to = new Date(y, m, d - 1);
-            const from = new Date(y, m, d - 14);
-            return {from, to};
-        }
-        case 'last30': {
-            const to = new Date(y, m, d - 1);
-            const from = new Date(y, m, d - 30);
-            return {from, to};
-        }
-        case 'thisWeek': {
-            const from = new Date(y, m, d - dayOfWeek);
-            return {from, to: today};
-        }
-        case 'lastWeek': {
-            const from = new Date(y, m, d - dayOfWeek - 7);
-            const to = new Date(y, m, d - dayOfWeek - 1);
-            return {from, to};
-        }
-        case 'thisMonth': {
-            const from = new Date(y, m, 1);
-            return {from, to: today};
-        }
-        case 'lastMonth': {
-            const from = new Date(y, m - 1, 1);
-            const to = new Date(y, m, 0);
-            return {from, to};
-        }
-        default:
-            return {from: today, to: today};
-    }
-}
-
-const DateRangePicker: React.FC<DateRangePickerProps> = ({startDate, endDate, onChange}) => {
-    const [open, setOpen] = useState(false);
-    const today = getBeijingToday();
-
-    const [viewMonth, setViewMonth] = useState<Date>(startOfMonth(today));
-    const [localStart, setLocalStart] = useState<Date | undefined>(
-        startDate ? new Date(startDate) : undefined,
-    );
-    const [localEnd, setLocalEnd] = useState<Date | undefined>(
-        endDate ? new Date(endDate) : undefined,
-    );
-    const [clickCount, setClickCount] = useState(0);
-    const [activePreset, setActivePreset] = useState<string>('');
-
-    useEffect(() => {
-        if (open) {
-            const s = startDate ? new Date(startDate) : undefined;
-            const e = endDate ? new Date(endDate) : undefined;
-            setLocalStart(s);
-            setLocalEnd(e);
-            setClickCount(0);
-            setViewMonth(s ? startOfMonth(s) : startOfMonth(today));
-            setActivePreset('');
-        }
-    }, [open]);
-
-    const handlePresetClick = (key: string) => {
-        const {from, to} = calcPresetRange(key);
-        setLocalStart(from);
-        setLocalEnd(to);
-        setClickCount(0);
-        setActivePreset(key);
-        setViewMonth(startOfMonth(from));
-    };
-
-    const handleDayClick = (day: Date) => {
-        setActivePreset('');
-        if (clickCount === 0 || (clickCount === 1 && localStart && day < localStart)) {
-            setLocalStart(day);
-            setLocalEnd(undefined);
-            setClickCount(1);
-        } else {
-            if (localStart) {
-                setLocalEnd(day);
-                setClickCount(0);
-            }
-        }
-    };
-
-    const handlePrevMonth = () => setViewMonth(addMonths(viewMonth, -1));
-    const handleNextMonth = () => setViewMonth(addMonths(viewMonth, 1));
-
-    const handleConfirm = () => {
-        if (localStart && localEnd) {
-            onChange(formatLocalDate(localStart), formatLocalDate(localEnd));
-        } else if (localStart && !localEnd) {
-            onChange(formatLocalDate(localStart), undefined);
-        } else {
-            onChange(undefined, undefined);
-        }
-        setOpen(false);
-    };
-
-    const handleCancel = () => {
-        setOpen(false);
-    };
-
-    const handleClear = () => {
-        setLocalStart(undefined);
-        setLocalEnd(undefined);
-        setClickCount(0);
-        setActivePreset('');
-    };
-
-    const hasValue = !!startDate;
-    const displayText = startDate && endDate
-        ? `${startDate} ~ ${endDate}`
-        : startDate
-            ? `${startDate} ~ ?`
-            : '选择日期范围';
-
-    const secondMonth = addMonths(viewMonth, 1);
-    const leftMonthYear = viewMonth.getFullYear();
-    const leftMonthIdx = viewMonth.getMonth();
-    const rightMonthYear = secondMonth.getFullYear();
-    const rightMonthIdx = secondMonth.getMonth();
-
-    const renderMonth = (year: number, monthIdx: number, side: 'left' | 'right') => {
-        const firstDay = new Date(year, monthIdx, 1);
-        const lastDay = new Date(year, monthIdx + 1, 0);
-        const startWeekday = firstDay.getDay();
-        const daysInMonth = lastDay.getDate();
-        const prevMonthLastDay = new Date(year, monthIdx, 0).getDate();
-
-        const cells: { date: Date; inMonth: boolean }[] = [];
-        for (let i = startWeekday - 1; i >= 0; i--) {
-            cells.push({
-                date: new Date(year, monthIdx - 1, prevMonthLastDay - i),
-                inMonth: false,
-            });
-        }
-        for (let i = 1; i <= daysInMonth; i++) {
-            cells.push({date: new Date(year, monthIdx, i), inMonth: true});
-        }
-        while (cells.length % 7 !== 0 || cells.length < 42) {
-            const last = cells[cells.length - 1].date;
-            cells.push({
-                date: new Date(last.getFullYear(), last.getMonth(), last.getDate() + 1),
-                inMonth: false,
-            });
-            if (cells.length >= 42) break;
-        }
-
-        const isInRange = (d: Date) => {
-            if (!localStart) return false;
-            if (localEnd) return d >= localStart && d <= localEnd;
-            return d.getTime() === localStart.getTime();
-        };
-        const isStart = (d: Date) => localStart && d.getTime() === localStart.getTime();
-        const isEnd = (d: Date) => localEnd && d.getTime() === localEnd.getTime();
-        const isToday = (d: Date) => d.getTime() === today.getTime();
-
-        const weekdays = ['日', '一', '二', '三', '四', '五', '六'];
-        const monthLabel = `${year}年 ${monthIdx + 1}月`;
-
-        return (
-            <div key={`${side}-${year}-${monthIdx}`} className="flex w-64 flex-col">
-                <div className="mb-2 flex items-center justify-center">
-                    <span className="text-sm font-medium">{monthLabel}</span>
-                </div>
-                <div className="mb-1 grid grid-cols-7 gap-0">
-                    {weekdays.map((w) => (
-                        <div key={w} className="py-1 text-center text-xs text-muted-foreground">
-                            {w}
-                        </div>
-                    ))}
-                </div>
-                <div className="grid grid-cols-7 gap-0">
-                    {cells.map(({date, inMonth}, idx) => {
-                        const start = inMonth && isStart(date);
-                        const end = inMonth && isEnd(date);
-                        const inRange = inMonth && isInRange(date);
-                        const todayCell = inMonth && isToday(date);
-                        const single = start && end;
-                        return (
-                            <button
-                                key={idx}
-                                type="button"
-                                onClick={() => inMonth && handleDayClick(date)}
-                                disabled={!inMonth}
-                                className={cn(
-                                    'relative flex h-8 w-full items-center justify-center text-xs transition-colors',
-                                    inMonth ? 'text-foreground' : 'text-muted-foreground/40',
-                                    inRange && !start && !end && 'bg-primary/10 text-foreground',
-                                    start && 'rounded-l-sm bg-primary text-primary-foreground',
-                                    end && 'rounded-r-sm bg-primary text-primary-foreground',
-                                    single && 'rounded-sm',
-                                    inMonth && !inRange && !start && !end && 'hover:bg-accent',
-                                )}
-                            >
-                                <span>{date.getDate()}</span>
-                                {todayCell && inMonth && (
-                                    <span
-                                        className="absolute bottom-1 left-1/2 size-1 -translate-x-1/2 rounded-full bg-primary"/>
-                                )}
-                            </button>
-                        );
-                    })}
-                </div>
-            </div>
-        );
-    };
-
-    return (
-        <div className="relative w-full">
-            <Popover open={open} onOpenChange={setOpen}>
-                <PopoverTrigger asChild>
-                    <Button
-                        variant="outline"
-                        size="sm"
-                        className={cn(
-                            'h-8 w-full justify-start text-xs font-normal',
-                            hasValue && 'border-primary text-primary pr-7',
-                        )}
-                    >
-                        <CalendarIcon className="size-3 shrink-0 opacity-50"/>
-                        <span className={cn('truncate', !hasValue && 'text-muted-foreground')}>
-              {displayText}
-            </span>
-                    </Button>
-                </PopoverTrigger>
-                {hasValue && (
-                    <button
-                        type="button"
-                        className="absolute right-1.5 top-1/2 flex size-5 -translate-y-1/2 items-center justify-center rounded-sm text-muted-foreground hover:bg-accent hover:text-foreground"
-                        onClick={(e) => {
-                            e.stopPropagation();
-                            onChange(undefined, undefined);
-                        }}
-                        aria-label="清除筛选"
-                    >
-                        <X className="size-3"/>
-                    </button>
-                )}
-                <PopoverContent className="w-auto p-0" align="start" sideOffset={4}>
-                    <div className="flex">
-                        {/* 左侧快捷按钮 */}
-                        <div className="flex w-28 flex-col gap-0.5 border-r p-2">
-                            {PRESETS.map((p) => (
-                                <button
-                                    key={p.key}
-                                    type="button"
-                                    onClick={() => handlePresetClick(p.key)}
-                                    className={cn(
-                                        'rounded-sm px-2 py-1.5 text-left text-xs transition-colors',
-                                        activePreset === p.key
-                                            ? 'bg-primary/10 text-primary font-medium'
-                                            : 'text-foreground hover:bg-accent',
-                                    )}
-                                >
-                                    {p.label}
-                                </button>
-                            ))}
-                        </div>
-                        {/* 右侧双月日历 */}
-                        <div className="p-3">
-                            <div className="relative flex items-center justify-between px-2 pb-2">
-                                <button
-                                    type="button"
-                                    onClick={handlePrevMonth}
-                                    className="flex size-7 items-center justify-center rounded-sm text-muted-foreground hover:bg-accent hover:text-foreground"
-                                    aria-label="上个月"
-                                >
-                                    <ChevronLeft className="size-4"/>
-                                </button>
-                                <button
-                                    type="button"
-                                    onClick={handleNextMonth}
-                                    className="flex size-7 items-center justify-center rounded-sm text-muted-foreground hover:bg-accent hover:text-foreground"
-                                    aria-label="下个月"
-                                >
-                                    <ChevronRight className="size-4"/>
-                                </button>
-                            </div>
-                            <div className="flex gap-4">
-                                {renderMonth(leftMonthYear, leftMonthIdx, 'left')}
-                                {renderMonth(rightMonthYear, rightMonthIdx, 'right')}
-                            </div>
-                        </div>
-                    </div>
-                    {/* 底部操作按钮 */}
-                    <div className="flex items-center justify-between border-t px-3 py-2">
-                        <button
-                            type="button"
-                            onClick={handleClear}
-                            className="text-xs text-muted-foreground hover:text-foreground"
-                        >
-                            清空
-                        </button>
-                        <div className="flex gap-2">
-                            <Button size="sm" variant="outline" className="h-7 text-xs" onClick={handleCancel}>
-                                取消
-                            </Button>
-                            <Button
-                                size="sm"
-                                className="h-7 bg-emerald-600 text-xs text-white hover:bg-emerald-700"
-                                onClick={handleConfirm}
-                            >
-                                确认
-                            </Button>
-                        </div>
-                    </div>
-                </PopoverContent>
-            </Popover>
-        </div>
-    );
-};
-
-// -----------------------------------------------------------------------
-// FirstConsumptionDatePicker — dual-month calendar with before/after mode
-// -----------------------------------------------------------------------
-
-interface FirstConsumptionDatePickerProps {
-    dateMode?: 'before' | 'after' | 'range';
-    dateValue?: string;
-    onChange: (mode: 'before' | 'after' | 'range' | undefined, date: string | undefined) => void;
-}
-
-type FcMode = 'preset' | 'before' | 'after';
-
-const FirstConsumptionDatePicker: React.FC<FirstConsumptionDatePickerProps> = ({
-                                                                                   dateMode,
-                                                                                   dateValue,
-                                                                                   onChange,
-                                                                               }) => {
-    const [open, setOpen] = useState(false);
-    const today = getBeijingToday();
-
-    const [viewMonth, setViewMonth] = useState<Date>(startOfMonth(today));
-    const [localMode, setLocalMode] = useState<FcMode>('preset');
-    const [localPreset, setLocalPreset] = useState<string>('');
-    const [localPresetStart, setLocalPresetStart] = useState<Date | undefined>(undefined);
-    const [localPresetEnd, setLocalPresetEnd] = useState<Date | undefined>(undefined);
-    const [localSingleDate, setLocalSingleDate] = useState<Date | undefined>(undefined);
-
-    useEffect(() => {
-        if (open) {
-            if (dateMode === 'before' && dateValue) {
-                setLocalMode('before');
-                setLocalSingleDate(new Date(dateValue));
-                setViewMonth(startOfMonth(new Date(dateValue)));
-            } else if (dateMode === 'after' && dateValue) {
-                setLocalMode('after');
-                setLocalSingleDate(new Date(dateValue));
-                setViewMonth(startOfMonth(new Date(dateValue)));
-            } else {
-                setLocalMode('preset');
-                setLocalPreset('');
-                setLocalPresetStart(undefined);
-                setLocalPresetEnd(undefined);
-                setLocalSingleDate(undefined);
-                setViewMonth(startOfMonth(today));
-            }
-        }
-    }, [open]);
-
-    const handlePresetClick = (key: string) => {
-        const {from, to} = calcPresetRange(key);
-        setLocalMode('preset');
-        setLocalPreset(key);
-        setLocalPresetStart(from);
-        setLocalPresetEnd(to);
-        setLocalSingleDate(undefined);
-        setViewMonth(startOfMonth(from));
-    };
-
-    const handleModeClick = (mode: 'before' | 'after') => {
-        setLocalMode(mode);
-        setLocalPreset('');
-        setLocalPresetStart(undefined);
-        setLocalPresetEnd(undefined);
-        setLocalSingleDate(undefined);
-    };
-
-    const handleDayClick = (day: Date) => {
-        if (localMode === 'preset') {
-            setLocalPreset('');
-            if (!localPresetStart || (localPresetStart && localPresetEnd && day < localPresetStart)) {
-                setLocalPresetStart(day);
-                setLocalPresetEnd(undefined);
-            } else if (localPresetStart && !localPresetEnd) {
-                setLocalPresetEnd(day);
-            } else {
-                setLocalPresetStart(day);
-                setLocalPresetEnd(undefined);
-            }
-        } else {
-            setLocalSingleDate(day);
-        }
-    };
-
-    const handlePrevMonth = () => setViewMonth(addMonths(viewMonth, -1));
-    const handleNextMonth = () => setViewMonth(addMonths(viewMonth, 1));
-
-    const handleConfirm = () => {
-        if (localMode === 'preset') {
-            if (localPresetStart && localPresetEnd) {
-                onChange('range', formatLocalDate(localPresetStart) + '~' + formatLocalDate(localPresetEnd));
-            } else {
-                onChange(undefined, undefined);
-            }
-        } else if (localMode === 'before' && localSingleDate) {
-            onChange('before', formatLocalDate(localSingleDate));
-        } else if (localMode === 'after' && localSingleDate) {
-            onChange('after', formatLocalDate(localSingleDate));
-        } else {
-            onChange(undefined, undefined);
-        }
-        setOpen(false);
-    };
-
-    const handleCancel = () => setOpen(false);
-
-    const handleClear = () => {
-        setLocalMode('preset');
-        setLocalPreset('');
-        setLocalPresetStart(undefined);
-        setLocalPresetEnd(undefined);
-        setLocalSingleDate(undefined);
-    };
-
-    const hasValue = !!dateMode && !!dateValue;
-    let displayText = '选择日期';
-    if (dateMode === 'before') displayText = `早于 ${dateValue}`;
-    else if (dateMode === 'after') displayText = `晚于 ${dateValue}`;
-    else if (dateMode === 'range') displayText = dateValue || '选择日期';
-
-    const secondMonth = addMonths(viewMonth, 1);
-    const leftMonthYear = viewMonth.getFullYear();
-    const leftMonthIdx = viewMonth.getMonth();
-    const rightMonthYear = secondMonth.getFullYear();
-    const rightMonthIdx = secondMonth.getMonth();
-
-    const getRangeStart = (): Date | undefined => {
-        if (localMode === 'preset') return localPresetStart;
-        return undefined;
-    };
-    const getRangeEnd = (): Date | undefined => {
-        if (localMode === 'preset') return localPresetEnd;
-        return undefined;
-    };
-    const getSingleDate = (): Date | undefined => {
-        if (localMode === 'before' || localMode === 'after') return localSingleDate;
-        return undefined;
-    };
-
-    const renderMonth = (year: number, monthIdx: number, side: 'left' | 'right') => {
-        const firstDay = new Date(year, monthIdx, 1);
-        const lastDay = new Date(year, monthIdx + 1, 0);
-        const startWeekday = firstDay.getDay();
-        const daysInMonth = lastDay.getDate();
-        const prevMonthLastDay = new Date(year, monthIdx, 0).getDate();
-
-        const cells: { date: Date; inMonth: boolean }[] = [];
-        for (let i = startWeekday - 1; i >= 0; i--) {
-            cells.push({
-                date: new Date(year, monthIdx - 1, prevMonthLastDay - i),
-                inMonth: false,
-            });
-        }
-        for (let i = 1; i <= daysInMonth; i++) {
-            cells.push({date: new Date(year, monthIdx, i), inMonth: true});
-        }
-        while (cells.length % 7 !== 0 || cells.length < 42) {
-            const last = cells[cells.length - 1].date;
-            cells.push({
-                date: new Date(last.getFullYear(), last.getMonth(), last.getDate() + 1),
-                inMonth: false,
-            });
-            if (cells.length >= 42) break;
-        }
-
-        const rangeStart = getRangeStart();
-        const rangeEnd = getRangeEnd();
-        const singleDate = getSingleDate();
-
-        const isInRange = (d: Date) => {
-            if (!rangeStart) return false;
-            if (rangeEnd) return d >= rangeStart && d <= rangeEnd;
-            return d.getTime() === rangeStart.getTime();
-        };
-        const isStart = (d: Date) => rangeStart && d.getTime() === rangeStart.getTime();
-        const isEnd = (d: Date) => rangeEnd && d.getTime() === rangeEnd.getTime();
-        const isSingle = (d: Date) => singleDate && d.getTime() === singleDate.getTime();
-        const isToday = (d: Date) => d.getTime() === today.getTime();
-
-        const weekdays = ['日', '一', '二', '三', '四', '五', '六'];
-        const monthLabel = `${year}年 ${monthIdx + 1}月`;
-
-        return (
-            <div key={`${side}-${year}-${monthIdx}`} className="flex w-64 flex-col">
-                <div className="mb-2 flex items-center justify-center">
-                    <span className="text-sm font-medium">{monthLabel}</span>
-                </div>
-                <div className="mb-1 grid grid-cols-7 gap-0">
-                    {weekdays.map((w) => (
-                        <div key={w} className="py-1 text-center text-xs text-muted-foreground">
-                            {w}
-                        </div>
-                    ))}
-                </div>
-                <div className="grid grid-cols-7 gap-0">
-                    {cells.map(({date, inMonth}, idx) => {
-                        const start = inMonth && !!isStart(date);
-                        const end = inMonth && !!isEnd(date);
-                        const inRange = inMonth && isInRange(date);
-                        const single = inMonth && !!isSingle(date);
-                        const todayCell = inMonth && isToday(date);
-                        const singleRange = start && end;
-                        return (
-                            <button
-                                key={idx}
-                                type="button"
-                                onClick={() => inMonth && handleDayClick(date)}
-                                disabled={!inMonth}
-                                className={cn(
-                                    'relative flex h-8 w-full items-center justify-center text-xs transition-colors',
-                                    inMonth ? 'text-foreground' : 'text-muted-foreground/40',
-                                    inRange && !start && !end && 'bg-primary/10 text-foreground',
-                                    start && 'rounded-l-sm bg-primary text-primary-foreground',
-                                    end && 'rounded-r-sm bg-primary text-primary-foreground',
-                                    singleRange && 'rounded-sm',
-                                    single && 'rounded-sm bg-primary text-primary-foreground',
-                                    inMonth && !inRange && !start && !end && !single && 'hover:bg-accent',
-                                )}
-                            >
-                                <span>{date.getDate()}</span>
-                                {todayCell && inMonth && (
-                                    <span
-                                        className="absolute bottom-1 left-1/2 size-1 -translate-x-1/2 rounded-full bg-primary"/>
-                                )}
-                            </button>
-                        );
-                    })}
-                </div>
-            </div>
-        );
-    };
-
-    return (
-        <div className="relative w-full">
-            <Popover open={open} onOpenChange={setOpen}>
-                <PopoverTrigger asChild>
-                    <Button
-                        variant="outline"
-                        size="sm"
-                        className={cn(
-                            'h-8 w-full justify-start text-xs font-normal',
-                            hasValue && 'border-primary text-primary pr-7',
-                        )}
-                    >
-                        <CalendarIcon className="size-3 shrink-0 opacity-50"/>
-                        <span className={cn('truncate', !hasValue && 'text-muted-foreground')}>
-              {displayText}
-            </span>
-                    </Button>
-                </PopoverTrigger>
-                {hasValue && (
-                    <button
-                        type="button"
-                        className="absolute right-1.5 top-1/2 flex size-5 -translate-y-1/2 items-center justify-center rounded-sm text-muted-foreground hover:bg-accent hover:text-foreground"
-                        onClick={(e) => {
-                            e.stopPropagation();
-                            onChange(undefined, undefined);
-                        }}
-                        aria-label="清除筛选"
-                    >
-                        <X className="size-3"/>
-                    </button>
-                )}
-                <PopoverContent className="w-auto p-0" align="start" sideOffset={4}>
-                    <div className="flex">
-                        {/* 左侧快捷选项 */}
-                        <div className="flex w-28 flex-col gap-0.5 border-r p-2">
-                            {PRESETS.map((p) => (
-                                <button
-                                    key={p.key}
-                                    type="button"
-                                    onClick={() => handlePresetClick(p.key)}
-                                    className={cn(
-                                        'rounded-sm px-2 py-1.5 text-left text-xs transition-colors',
-                                        localMode === 'preset' && localPreset === p.key
-                                            ? 'bg-primary/10 text-primary font-medium'
-                                            : 'text-foreground hover:bg-accent',
-                                    )}
-                                >
-                                    {p.label}
-                                </button>
-                            ))}
-                            <div className="my-1 border-t border-border"/>
-                            {(['before', 'after'] as const).map((mode) => (
-                                <button
-                                    key={mode}
-                                    type="button"
-                                    onClick={() => handleModeClick(mode)}
-                                    className={cn(
-                                        'rounded-sm px-2 py-1.5 text-left text-xs transition-colors',
-                                        localMode === mode
-                                            ? 'bg-primary/10 text-primary font-medium'
-                                            : 'text-foreground hover:bg-accent',
-                                    )}
-                                >
-                                    {mode === 'before' ? '早于' : '晚于'}
-                                </button>
-                            ))}
-                        </div>
-                        {/* 右侧双月日历 */}
-                        <div className="p-3">
-                            <div className="relative flex items-center justify-between px-2 pb-2">
-                                <button
-                                    type="button"
-                                    onClick={handlePrevMonth}
-                                    className="flex size-7 items-center justify-center rounded-sm text-muted-foreground hover:bg-accent hover:text-foreground"
-                                    aria-label="上个月"
-                                >
-                                    <ChevronLeft className="size-4"/>
-                                </button>
-                                <button
-                                    type="button"
-                                    onClick={handleNextMonth}
-                                    className="flex size-7 items-center justify-center rounded-sm text-muted-foreground hover:bg-accent hover:text-foreground"
-                                    aria-label="下个月"
-                                >
-                                    <ChevronRight className="size-4"/>
-                                </button>
-                            </div>
-                            <div className="flex gap-4">
-                                {renderMonth(leftMonthYear, leftMonthIdx, 'left')}
-                                {renderMonth(rightMonthYear, rightMonthIdx, 'right')}
-                            </div>
-                        </div>
-                    </div>
-                    {/* 底部操作按钮 */}
-                    <div className="flex items-center justify-between border-t px-3 py-2">
-                        <button
-                            type="button"
-                            onClick={handleClear}
-                            className="text-xs text-muted-foreground hover:text-foreground"
-                        >
-                            清空
-                        </button>
-                        <div className="flex gap-2">
-                            <Button size="sm" variant="outline" className="h-7 text-xs" onClick={handleCancel}>
-                                取消
-                            </Button>
-                            <Button
-                                size="sm"
-                                className="h-7 bg-emerald-600 text-xs text-white hover:bg-emerald-700"
-                                onClick={handleConfirm}
-                            >
-                                确认
-                            </Button>
-                        </div>
-                    </div>
-                </PopoverContent>
-            </Popover>
-        </div>
-    );
-};
-
-// -----------------------------------------------------------------------
 // FilterBar
 // -----------------------------------------------------------------------
 
 const EMPTY_FILTERS: AdDataFilterParams = getDefaultFilters();
+
+/** 筛选栏字段键（idSearch 为合并后的 ID 搜索，始终可见、不参与折叠） */
+export type FilterFieldKey =
+    | 'firstConsumptionDate'
+    | 'agent'
+    | 'materialType'
+    | 'materialDirection'
+    | 'newOrActive'
+    | 'country'
+    | 'advertiser'
+    | 'group'
+    | 'idSearch'
+    | 'investTime'
+    | 'yesterdayCost'
+    | 'investDays'
+    | 'productionDate'
+    | 'keyword'
+    | 'keywordFields'
+    | 'trustedData'
+    | 'renovationStatus';
+
+interface FieldEntry {
+    key: FilterFieldKey;
+    node: React.ReactNode;
+}
+
+/** 将 ID搜索 输入按逗号/空格等分隔符拆分为去重后的 ID 列表 */
+function parseIdSearch(value: string): string[] {
+    const parts: string[] = value.split(/[,，、;；\s]+/u);
+    const result: string[] = [];
+    for (const part of parts) {
+        const trimmed: string = part.trim();
+        if (trimmed && !result.includes(trimmed)) result.push(trimmed);
+    }
+    return result;
+}
+
+/** 归一化 creativeIdentityId / videoMaterialId 参数为 ID 数组 */
+function toIdArray(value: string | string[] | undefined): string[] {
+    if (value === undefined) return [];
+    if (typeof value === 'string') return value.trim() ? [value.trim()] : [];
+    return value.map((v: string) => v.trim()).filter((v: string) => v.length > 0);
+}
+
+function sameIdList(a: string[], b: string[]): boolean {
+    if (a.length !== b.length) return false;
+    return a.every((v: string, i: number) => v === b[i]);
+}
+
+function arrEqualsDefault(arr: string[] | undefined, def: string[] | undefined): boolean {
+    const left: string[] = arr ?? [];
+    const right: string[] = def ?? [];
+    if (left.length !== right.length) return false;
+    return left.every((v: string) => right.includes(v));
+}
+
+/** 判断某筛选字段是否处于激活状态（相对默认值） */
+function isFieldActive(key: FilterFieldKey, f: AdDataFilterParams): boolean {
+    switch (key) {
+        case 'firstConsumptionDate':
+            return (
+                (f.dateStart ?? '') !== (EMPTY_FILTERS.dateStart ?? '') ||
+                (f.dateMode ?? '') !== (EMPTY_FILTERS.dateMode ?? '')
+            );
+        case 'agent':
+            return !arrEqualsDefault(f.agent, EMPTY_FILTERS.agent);
+        case 'materialType':
+            return (f.materialType ?? []).length > 0;
+        case 'materialDirection':
+            return (f.materialDirection ?? []).length > 0;
+        case 'newOrActive':
+            return (f.newOrActive ?? []).length > 0;
+        case 'country':
+            return (f.country ?? []).length > 0;
+        case 'advertiser':
+            return (f.advertiser ?? []).length > 0;
+        case 'group':
+            return (f.group ?? []).length > 0;
+        case 'investTime':
+            return (
+                (f.investTimeStart ?? '') !== (EMPTY_FILTERS.investTimeStart ?? '') ||
+                (f.investTimeEnd ?? '') !== (EMPTY_FILTERS.investTimeEnd ?? '')
+            );
+        case 'yesterdayCost':
+            return f.yesterdayCostMin !== undefined;
+        case 'investDays':
+            return f.investDaysMin !== undefined || f.investDaysMax !== undefined;
+        case 'productionDate':
+            return !!(f.productionDateStart || f.productionDateEnd) || !!f.productionDateEmpty;
+        case 'keyword':
+            return (!!f.keyword && f.keyword.trim().length > 0) || (f.keywordFields ?? []).length > 0;
+        case 'keywordFields':
+            return (f.keywordFields ?? []).length > 0;
+        case 'trustedData':
+            return !!f.trustedData;
+        case 'renovationStatus':
+            return !!f.renovationStatusFilter;
+        default:
+            return false;
+    }
+}
 
 const FilterBar: React.FC<FilterBarProps> = ({
                                                  filters,
@@ -966,12 +359,23 @@ const FilterBar: React.FC<FilterBarProps> = ({
                                                  showInvestDays = false,
                                                  showProductionDate = false,
                                                  showYesterdayCostMin = false,
-                                                 showRenovationStatus = false
+                                                 showRenovationStatus = false,
+                                                 showGroupFilter = false,
+                                                 primaryFields,
+                                                 idSearchPrimary = true,
+                                                 orderPrimaryByList = false,
+                                                 showInvestTimeReset = false,
+                                                 investTimeResetTab = 'country-pivot',
+                                                 investTimeResetAll = false,
+                                                 showKeywordFields = false,
+                                                 keywordFieldOptions
                                              }) => {
     const [options, setOptions] = useState<FilterOptions | null>(null);
+    const [groupOptions, setGroupOptions] = useState<string[]>([]);
     const [keywordInput, setKeywordInput] = useState(filters.keyword ?? '');
-    const [creativeIdInput, setCreativeIdInput] = useState(filters.creativeIdentityId ?? '');
-    const [videoMaterialIdInput, setVideoMaterialIdInput] = useState(filters.videoMaterialId ?? '');
+    const [idSearchInput, setIdSearchInput] = useState<string>(() =>
+        toIdArray(filters.idSearch).join(', '));
+    const lastPushedIdsRef = useRef<string[]>(toIdArray(filters.idSearch));
     const filtersRef = useRef(filters);
     filtersRef.current = filters;
 
@@ -985,6 +389,18 @@ const FilterBar: React.FC<FilterBarProps> = ({
             }
         })();
     }, []);
+
+    useEffect(() => {
+        if (!showGroupFilter) return;
+        void (async () => {
+            try {
+                const {data} = await getGroupNames();
+                setGroupOptions(data.groupNames ?? []);
+            } catch (err) {
+                logger.error('Failed to load group names:', err);
+            }
+        })();
+    }, [showGroupFilter]);
 
     useEffect(() => {
         const timer = setTimeout(() => {
@@ -1002,31 +418,25 @@ const FilterBar: React.FC<FilterBarProps> = ({
 
     useEffect(() => {
         const timer = setTimeout(() => {
-            const current = filtersRef.current.creativeIdentityId ?? '';
-            if (creativeIdInput !== current) {
-                onChange({...filtersRef.current, creativeIdentityId: creativeIdInput || undefined});
+            const ids: string[] = parseIdSearch(idSearchInput);
+            if (!sameIdList(ids, toIdArray(filtersRef.current.idSearch))) {
+                lastPushedIdsRef.current = ids;
+                onChange({
+                    ...filtersRef.current,
+                    idSearch: ids.length > 0 ? ids : undefined,
+                });
             }
         }, 500);
         return () => clearTimeout(timer);
-    }, [creativeIdInput, onChange]);
+    }, [idSearchInput, onChange]);
 
     useEffect(() => {
-        setCreativeIdInput(filters.creativeIdentityId ?? '');
-    }, [filters.creativeIdentityId]);
-
-    useEffect(() => {
-        const timer = setTimeout(() => {
-            const current = filtersRef.current.videoMaterialId ?? '';
-            if (videoMaterialIdInput !== current) {
-                onChange({...filtersRef.current, videoMaterialId: videoMaterialIdInput || undefined});
-            }
-        }, 500);
-        return () => clearTimeout(timer);
-    }, [videoMaterialIdInput, onChange]);
-
-    useEffect(() => {
-        setVideoMaterialIdInput(filters.videoMaterialId ?? '');
-    }, [filters.videoMaterialId]);
+        const external = toIdArray(filters.idSearch);
+        if (!sameIdList(external, lastPushedIdsRef.current)) {
+            lastPushedIdsRef.current = external;
+            setIdSearchInput(external.join(', '));
+        }
+    }, [filters.idSearch]);
 
     const update = useCallback(
         (patch: Partial<AdDataFilterParams>) => {
@@ -1036,26 +446,76 @@ const FilterBar: React.FC<FilterBarProps> = ({
     );
 
     const handleReset = useCallback(() => {
-        onChange({...EMPTY_FILTERS});
+        const base: AdDataFilterParams = {...EMPTY_FILTERS};
+        if (showInvestTimeReset) {
+            const range = getTabDefaultDateRange(investTimeResetTab);
+            if (range) {
+                base.investTimeStart = range.start;
+                base.investTimeEnd = range.end;
+            }
+        }
+        onChange(base);
         setKeywordInput('');
-    }, [onChange]);
+        setIdSearchInput('');
+    }, [onChange, showInvestTimeReset, investTimeResetTab]);
 
     const fieldClass = 'flex flex-col gap-1 min-w-[140px]';
 
-    return (
-        <div>
-            <div className="flex flex-wrap items-end gap-3">
-                {/* 首消日期 */}
+    const idSearchNode: React.ReactNode = (
+        <div className={fieldClass}>
+            <label className="text-xs font-medium text-muted-foreground">ID搜索</label>
+            <div className="relative w-full">
+                <Input
+                    className={cn('h-8 w-56 text-xs', idSearchInput && 'pr-7')}
+                    placeholder="ID搜索，逗号分隔"
+                    value={idSearchInput}
+                    onChange={(e: React.ChangeEvent<HTMLInputElement>) => setIdSearchInput(e.target.value)}
+                />
+                {idSearchInput && (
+                    <button
+                        type="button"
+                        className="absolute right-1.5 top-1/2 flex size-5 -translate-y-1/2 items-center justify-center rounded-sm text-muted-foreground hover:bg-accent hover:text-foreground"
+                        onClick={() => {
+                            setIdSearchInput('');
+                            onChange({...filtersRef.current, idSearch: undefined});
+                        }}
+                        aria-label="清除ID搜索"
+                    >
+                        <X className="size-3"/>
+                    </button>
+                )}
+            </div>
+        </div>
+    );
+
+    const fcRangeMatch: RegExpMatchArray | null =
+        filters.dateMode === 'range' && filters.dateStart
+            ? filters.dateStart.match(/^(\d{4}-\d{2}-\d{2})~(\d{4}-\d{2}-\d{2})$/u)
+            : null;
+    const fcStartDate: string | undefined = fcRangeMatch ? fcRangeMatch[1] : undefined;
+    const fcEndDate: string | undefined = fcRangeMatch ? fcRangeMatch[2] : undefined;
+
+    const fieldEntries: FieldEntry[] = [
+        {
+            key: 'firstConsumptionDate',
+            node: (
                 <div className={fieldClass}>
                     <label className="text-xs font-medium text-muted-foreground">首消日期</label>
-                    <FirstConsumptionDatePicker
-                        dateMode={filters.dateMode}
-                        dateValue={filters.dateStart}
-                        onChange={(mode, date) => update({dateMode: mode, dateStart: date})}
+                    <DateRangePicker
+                        startDate={fcStartDate}
+                        endDate={fcEndDate}
+                        onChange={(start: string | undefined, end: string | undefined) =>
+                            start && end
+                                ? update({dateMode: 'range', dateStart: `${start}~${end}`})
+                                : update({dateMode: undefined, dateStart: undefined})
+                        }
                     />
                 </div>
-
-                {/* 代理商 */}
+            ),
+        },
+        {
+            key: 'agent',
+            node: (
                 <div className={fieldClass}>
                     <label className="text-xs font-medium text-muted-foreground">代理商</label>
                     <MultiSelect
@@ -1065,8 +525,11 @@ const FilterBar: React.FC<FilterBarProps> = ({
                         onChange={(v) => update({agent: v.length > 0 ? v : undefined})}
                     />
                 </div>
-
-                {/* 素材类型 */}
+            ),
+        },
+        {
+            key: 'materialType',
+            node: (
                 <div className={fieldClass}>
                     <label className="text-xs font-medium text-muted-foreground">素材类型</label>
                     <MultiSelect
@@ -1076,8 +539,11 @@ const FilterBar: React.FC<FilterBarProps> = ({
                         onChange={(v) => update({materialType: v.length > 0 ? v : undefined})}
                     />
                 </div>
-
-                {/* 素材方向 */}
+            ),
+        },
+        {
+            key: 'materialDirection',
+            node: (
                 <div className={fieldClass}>
                     <label className="text-xs font-medium text-muted-foreground">素材方向</label>
                     <MultiSelect
@@ -1087,8 +553,11 @@ const FilterBar: React.FC<FilterBarProps> = ({
                         onChange={(v) => update({materialDirection: v.length > 0 ? v : undefined})}
                     />
                 </div>
-
-                {/* 人群类型 */}
+            ),
+        },
+        {
+            key: 'newOrActive',
+            node: (
                 <div className={fieldClass}>
                     <label className="text-xs font-medium text-muted-foreground">人群类型</label>
                     <MultiSelect
@@ -1098,8 +567,11 @@ const FilterBar: React.FC<FilterBarProps> = ({
                         onChange={(v) => update({newOrActive: v.length > 0 ? v : undefined})}
                     />
                 </div>
-
-                {/* 国家 */}
+            ),
+        },
+        {
+            key: 'country',
+            node: (
                 <div className={fieldClass}>
                     <label className="text-xs font-medium text-muted-foreground">国家</label>
                     <MultiSelect
@@ -1110,175 +582,214 @@ const FilterBar: React.FC<FilterBarProps> = ({
                         formatLabel={getCountryDisplayCode}
                     />
                 </div>
-
-                {/* 投放人 */}
-                {!hideFields.includes('advertiser') && (
-                    <div className={fieldClass}>
-                        <label className="text-xs font-medium text-muted-foreground">投放人</label>
-                        <MultiSelect
-                            label="投放人"
-                            options={options?.advertisers ?? []}
-                            selected={filters.advertiser ?? []}
-                            onChange={(v) => update({advertiser: v.length > 0 ? v : undefined})}
-                        />
+            ),
+        },
+        {
+            key: 'advertiser',
+            node: (
+                <div className={fieldClass}>
+                    <label className="text-xs font-medium text-muted-foreground">投放人</label>
+                    <MultiSelect
+                        label="投放人"
+                        options={options?.advertisers ?? []}
+                        selected={filters.advertiser ?? []}
+                        onChange={(v) => update({advertiser: v.length > 0 ? v : undefined})}
+                    />
+                </div>
+            ),
+        },
+        {
+            key: 'group',
+            node: (
+                <div className={fieldClass}>
+                    <label className="text-xs font-medium text-muted-foreground">组别</label>
+                    <MultiSelect
+                        label="组别"
+                        options={groupOptions}
+                        selected={filters.group ?? []}
+                        onChange={(v) => update({group: v.length > 0 ? v : undefined})}
+                    />
+                </div>
+            ),
+        },
+        {key: 'idSearch', node: idSearchNode},
+        {
+            key: 'investTime',
+            node: (
+                <div className={fieldClass}>
+                    <div className="flex items-center justify-between gap-2">
+                        <label className="text-xs font-medium text-muted-foreground">消耗日期</label>
+                        {showInvestTimeReset && (
+                            <button
+                                type="button"
+                                className="text-[11px] text-primary hover:underline"
+                                onClick={() => {
+                                    if (investTimeResetAll) {
+                                        onChange(getDefaultFilters());
+                                        return;
+                                    }
+                                    const range = getTabDefaultDateRange(investTimeResetTab);
+                                    if (range) update({investTimeStart: range.start, investTimeEnd: range.end});
+                                }}
+                            >
+                                恢复默认
+                            </button>
+                        )}
                     </div>
-                )}
-
-                {/* 创意身份ID */}
-                <div className={fieldClass}>
-                    <label className="text-xs font-medium text-muted-foreground">创意身份ID</label>
-                    <Input
-                        placeholder="输入创意身份ID"
-                        value={creativeIdInput}
-                        onChange={(e: React.ChangeEvent<HTMLInputElement>) => setCreativeIdInput(e.target.value)}
-                        className="h-8 text-xs"
-                    />
-                </div>
-
-                {/* 视频素材ID */}
-                <div className={fieldClass}>
-                    <label className="text-xs font-medium text-muted-foreground">视频素材ID</label>
-                    <Input
-                        placeholder="输入视频素材ID"
-                        value={videoMaterialIdInput}
-                        onChange={(e: React.ChangeEvent<HTMLInputElement>) => setVideoMaterialIdInput(e.target.value)}
-                        className="h-8 text-xs"
-                    />
-                </div>
-
-                {/* 消耗时间（两次点击选范围） */}
-                <div className={fieldClass}>
-                    <label className="text-xs font-medium text-muted-foreground">消耗时间</label>
                     <DateRangePicker
                         startDate={filters.investTimeStart}
                         endDate={filters.investTimeEnd}
                         onChange={(start, end) => update({investTimeStart: start, investTimeEnd: end})}
                     />
                 </div>
-
-                {/* 昨天消耗 */}
-                {showYesterdayCostMin && (
-                    <div className={fieldClass}>
-                        <label className="text-xs font-medium text-muted-foreground">昨天消耗</label>
-                        <div className="flex h-8 items-center gap-1">
-                            <Input
-                                type="number"
-                                min={0}
-                                className="h-8 w-20 text-xs"
-                                placeholder="≥"
-                                value={filters.yesterdayCostMin ?? ''}
-                                onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
-                                    const v = e.target.value;
-                                    update({yesterdayCostMin: v ? Number(v) : undefined});
-                                }}
-                            />
-                            <span className="text-xs text-muted-foreground">美元</span>
-                        </div>
-                    </div>
-                )}
-
-                {/* 在投天数 */}
-                {showInvestDays && (
-                    <div className={fieldClass}>
-                        <label className="text-xs font-medium text-muted-foreground">在投天数</label>
-                        <div className="flex h-8 items-center gap-1">
-                            <Input
-                                type="number"
-                                min={1}
-                                className="h-8 w-16 text-xs"
-                                placeholder="≥"
-                                value={filters.investDaysMin ?? ''}
-                                onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
-                                    const v = e.target.value;
-                                    update({investDaysMin: v ? Number(v) : undefined});
-                                }}
-                            />
-                            <span className="text-xs text-muted-foreground">—</span>
-                            <Input
-                                type="number"
-                                min={1}
-                                className="h-8 w-16 text-xs"
-                                placeholder="≤"
-                                value={filters.investDaysMax ?? ''}
-                                onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
-                                    const v = e.target.value;
-                                    update({investDaysMax: v ? Number(v) : undefined});
-                                }}
-                            />
-                        </div>
-                    </div>
-                )}
-
-                {/* 制作日期 */}
-                {showProductionDate && (
-                    <div className={fieldClass}>
-                        <label className="text-xs font-medium text-muted-foreground">制作日期</label>
-                        <DateRangePicker
-                            startDate={filters.productionDateStart}
-                            endDate={filters.productionDateEnd}
-                            onChange={(start, end) => update({
-                                productionDateStart: start,
-                                productionDateEnd: end,
-                                productionDateEmpty: false
-                            })}
-                        />
-                        <label
-                            className="flex items-center gap-1.5 mt-1.5 text-[11px] text-muted-foreground cursor-pointer select-none">
-                            <input
-                                type="checkbox"
-                                className="size-3 accent-primary"
-                                checked={!!filters.productionDateEmpty}
-                                onChange={(e) => {
-                                    if (e.target.checked) {
-                                        update({
-                                            productionDateStart: '',
-                                            productionDateEnd: '',
-                                            productionDateEmpty: true
-                                        });
-                                    } else {
-                                        update({productionDateEmpty: false});
-                                    }
-                                }}
-                            />
-                            仅看制作日期为空
-                        </label>
-                    </div>
-                )}
-
-                {/* 关键词 */}
+            ),
+        },
+        {
+            key: 'yesterdayCost',
+            node: (
                 <div className={fieldClass}>
-                    <label className="text-xs font-medium text-muted-foreground">关键词</label>
-                    <div className="relative w-full">
+                    <label className="text-xs font-medium text-muted-foreground">昨天消耗</label>
+                    <div className="flex h-8 items-center gap-1">
                         <Input
-                            className={cn('h-8 text-xs', keywordInput && 'pr-7')}
-                            placeholder="搜索关键词"
-                            value={keywordInput}
-                            onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
-                                setKeywordInput(e.target.value)
-                            }
-                            onKeyDown={(e: React.KeyboardEvent<HTMLInputElement>) => {
-                                if (e.key === 'Enter') {
-                                    onChange({...filtersRef.current, keyword: keywordInput || undefined});
+                            type="number"
+                            min={0}
+                            className="h-8 w-20 text-xs"
+                            placeholder="≥"
+                            value={filters.yesterdayCostMin ?? ''}
+                            onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
+                                const v = e.target.value;
+                                update({yesterdayCostMin: v ? Number(v) : undefined});
+                            }}
+                        />
+                        <span className="text-xs text-muted-foreground">美元</span>
+                    </div>
+                </div>
+            ),
+        },
+        {
+            key: 'investDays',
+            node: (
+                <div className={fieldClass}>
+                    <label className="text-xs font-medium text-muted-foreground">在投天数</label>
+                    <div className="flex h-8 items-center gap-1">
+                        <Input
+                            type="number"
+                            min={1}
+                            className="h-8 w-16 text-xs"
+                            placeholder="≥"
+                            value={filters.investDaysMin ?? ''}
+                            onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
+                                const v = e.target.value;
+                                update({investDaysMin: v ? Number(v) : undefined});
+                            }}
+                        />
+                        <span className="text-xs text-muted-foreground">—</span>
+                        <Input
+                            type="number"
+                            min={1}
+                            className="h-8 w-16 text-xs"
+                            placeholder="≤"
+                            value={filters.investDaysMax ?? ''}
+                            onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
+                                const v = e.target.value;
+                                update({investDaysMax: v ? Number(v) : undefined});
+                            }}
+                        />
+                    </div>
+                </div>
+            ),
+        },
+        {
+            key: 'productionDate',
+            node: (
+                <div className={fieldClass}>
+                    <label className="text-xs font-medium text-muted-foreground">制作日期</label>
+                    <DateRangePicker
+                        startDate={filters.productionDateStart}
+                        endDate={filters.productionDateEnd}
+                        onChange={(start, end) => update({
+                            productionDateStart: start,
+                            productionDateEnd: end,
+                            productionDateEmpty: false
+                        })}
+                    />
+                    <label
+                        className="flex items-center gap-1.5 mt-1.5 text-[11px] text-muted-foreground cursor-pointer select-none">
+                        <input
+                            type="checkbox"
+                            className="size-3 accent-primary"
+                            checked={!!filters.productionDateEmpty}
+                            onChange={(e) => {
+                                if (e.target.checked) {
+                                    update({productionDateStart: '', productionDateEnd: '', productionDateEmpty: true});
+                                } else {
+                                    update({productionDateEmpty: false});
                                 }
                             }}
                         />
-                        {keywordInput && (
-                            <button
-                                type="button"
-                                className="absolute right-1.5 top-1/2 flex size-5 -translate-y-1/2 items-center justify-center rounded-sm text-muted-foreground hover:bg-accent hover:text-foreground"
-                                onClick={() => {
-                                    setKeywordInput('');
-                                    onChange({...filtersRef.current, keyword: undefined});
-                                }}
-                                aria-label="清除筛选"
-                            >
-                                <X className="size-3"/>
-                            </button>
-                        )}
-                    </div>
+                        仅看制作日期为空
+                    </label>
                 </div>
-
-                {/* 已置信数据 */}
+            ),
+        },
+        {
+            key: 'keyword',
+            node: (
+                <div className={fieldClass}>
+                    <label className="text-xs font-medium text-muted-foreground">关键词</label>
+                    {keywordFieldOptions && keywordFieldOptions.length > 0 ? (
+                        <KeywordSearchCombo
+                            className="w-full min-w-[240px]"
+                            value={keywordInput}
+                            onInputChange={setKeywordInput}
+                            onEnter={() => onChange({...filtersRef.current, keyword: keywordInput || undefined})}
+                            onClear={() => {
+                                setKeywordInput('');
+                                onChange({...filtersRef.current, keyword: undefined});
+                            }}
+                            fields={keywordFieldOptions}
+                            selectedFields={filters.keywordFields ?? []}
+                            onFieldsChange={(next: string[]) => onChange({
+                                ...filtersRef.current,
+                                keywordFields: next.length > 0 ? next : undefined
+                            })}
+                        />
+                    ) : (
+                        <div className="relative w-full">
+                            <Input
+                                className={cn('h-8 text-xs', keywordInput && 'pr-7')}
+                                placeholder="搜索关键词"
+                                value={keywordInput}
+                                onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
+                                    setKeywordInput(e.target.value)
+                                }
+                                onKeyDown={(e: React.KeyboardEvent<HTMLInputElement>) => {
+                                    if (e.key === 'Enter') {
+                                        onChange({...filtersRef.current, keyword: keywordInput || undefined});
+                                    }
+                                }}
+                            />
+                            {keywordInput && (
+                                <button
+                                    type="button"
+                                    className="absolute right-1.5 top-1/2 flex size-5 -translate-y-1/2 items-center justify-center rounded-sm text-muted-foreground hover:bg-accent hover:text-foreground"
+                                    onClick={() => {
+                                        setKeywordInput('');
+                                        onChange({...filtersRef.current, keyword: undefined});
+                                    }}
+                                    aria-label="清除筛选"
+                                >
+                                    <X className="size-3"/>
+                                </button>
+                            )}
+                        </div>
+                    )}
+                </div>
+            ),
+        },
+        {
+            key: 'trustedData',
+            node: (
                 <div className={fieldClass}>
                     <label className="text-xs font-medium text-muted-foreground">已置信数据</label>
                     <label className="flex h-8 cursor-pointer items-center gap-2">
@@ -1289,39 +800,85 @@ const FilterBar: React.FC<FilterBarProps> = ({
                         <span className="text-xs text-muted-foreground">仅显示T-8天前数据</span>
                     </label>
                 </div>
+            ),
+        },
+        {
+            key: 'renovationStatus',
+            node: (
+                <div className={fieldClass}>
+                    <label className="text-xs font-medium text-muted-foreground">二改提需状态</label>
+                    <Popover>
+                        <PopoverTrigger asChild>
+                            <Button variant="outline" size="sm"
+                                    className="h-8 w-[130px] justify-between text-xs font-normal">
+                                {filters.renovationStatusFilter ?? '全部'}
+                                <ChevronDown className="size-3 opacity-50"/>
+                            </Button>
+                        </PopoverTrigger>
+                        <PopoverContent className="w-[140px] p-1" align="start">
+                            {['全部', '已提二改需求', '未提'].map((opt) => (
+                                <button
+                                    key={opt}
+                                    type="button"
+                                    className={cn(
+                                        'w-full rounded-sm px-2 py-1.5 text-left text-xs hover:bg-accent',
+                                        (filters.renovationStatusFilter ?? '全部') === opt && 'bg-accent font-medium',
+                                    )}
+                                    onClick={() => update({renovationStatusFilter: opt === '全部' ? undefined : opt})}
+                                >
+                                    {opt}
+                                </button>
+                            ))}
+                        </PopoverContent>
+                    </Popover>
+                </div>
+            ),
+        },
+    ];
 
-                {showRenovationStatus && (
-                    <div className={fieldClass}>
-                        <label className="text-xs font-medium text-muted-foreground">二改提需状态</label>
-                        <Popover>
-                            <PopoverTrigger asChild>
-                                <Button variant="outline" size="sm"
-                                        className="h-8 w-[130px] justify-between text-xs font-normal">
-                                    {filters.renovationStatusFilter ?? '全部'}
-                                    <ChevronDown className="size-3 opacity-50"/>
-                                </Button>
-                            </PopoverTrigger>
-                            <PopoverContent className="w-[140px] p-1" align="start">
-                                {['全部', '已提二改需求', '未提'].map((opt) => (
-                                    <button
-                                        key={opt}
-                                        type="button"
-                                        className={cn(
-                                            'w-full rounded-sm px-2 py-1.5 text-left text-xs hover:bg-accent',
-                                            (filters.renovationStatusFilter ?? '全部') === opt && 'bg-accent font-medium',
-                                        )}
-                                        onClick={() => update({renovationStatusFilter: opt === '全部' ? undefined : opt})}
-                                    >
-                                        {opt}
-                                    </button>
-                                ))}
-                            </PopoverContent>
-                        </Popover>
-                    </div>
-                )}
+    const hiddenKeys: FilterFieldKey[] = [];
+    if (hideFields.includes('advertiser')) hiddenKeys.push('advertiser');
+    if (hideFields.includes('keyword')) {
+        hiddenKeys.push('keyword');
+        hiddenKeys.push('keywordFields');
+    }
+    if (!showGroupFilter) hiddenKeys.push('group');
+    if (!showYesterdayCostMin) hiddenKeys.push('yesterdayCost');
+    if (!showInvestDays) hiddenKeys.push('investDays');
+    if (!showProductionDate) hiddenKeys.push('productionDate');
+    if (!showRenovationStatus) hiddenKeys.push('renovationStatus');
 
-                {/* 刷新 + 重置按钮 */}
-                <div className="ml-auto flex items-center gap-1">
+    const visibleEntries: FieldEntry[] = fieldEntries.filter((e: FieldEntry) => !hiddenKeys.includes(e.key));
+    const collapseEnabled: boolean = primaryFields !== undefined;
+    const primaryList: string[] = primaryFields ?? [];
+    const basePrimary: FieldEntry[] = collapseEnabled
+        ? visibleEntries.filter((e: FieldEntry) => (idSearchPrimary && e.key === 'idSearch') || primaryList.includes(e.key))
+        : visibleEntries;
+    const primaryEntries: FieldEntry[] = collapseEnabled && orderPrimaryByList
+        ? [
+            ...primaryList.flatMap((k: string) => {
+                const hit = basePrimary.find((e: FieldEntry) => e.key === k);
+                return hit ? [hit] : [];
+            }),
+            ...(idSearchPrimary ? basePrimary.filter((e: FieldEntry) => e.key === 'idSearch') : []),
+        ]
+        : basePrimary;
+    const secondaryEntries: FieldEntry[] = collapseEnabled
+        ? visibleEntries.filter((e: FieldEntry) => !(idSearchPrimary && e.key === 'idSearch') && !primaryList.includes(e.key))
+        : [];
+    const activeSecondaryCount: number = secondaryEntries.filter((e: FieldEntry) => isFieldActive(e.key, filters)).length;
+
+    return (
+        <FilterRow
+            items={primaryEntries.map((e: FieldEntry) => (
+                <React.Fragment key={e.key}>{e.node}</React.Fragment>
+            ))}
+            preCollapsed={secondaryEntries.map((e: FieldEntry) => (
+                <React.Fragment key={e.key}>{e.node}</React.Fragment>
+            ))}
+            preCollapsedActiveCount={activeSecondaryCount}
+            actions={
+                <>
                     {onRefresh && (
                         <Button variant="ghost" size="sm" className="h-8 gap-1 text-xs" onClick={onRefresh}>
                             <RefreshCw className="size-3"/>
@@ -1332,9 +889,9 @@ const FilterBar: React.FC<FilterBarProps> = ({
                         <RotateCcw className="size-3"/>
                         重置筛选
                     </Button>
-                </div>
-            </div>
-        </div>
+                </>
+            }
+        />
     );
 };
 

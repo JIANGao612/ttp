@@ -38,6 +38,7 @@ export interface AdRecord {
     videoMaterialId: string;
     createdAt: string;
     updatedAt: string;
+    groupName: string | null;
 }
 
 /** 投放数据明细表记录 */
@@ -91,6 +92,7 @@ export interface AdDataFilterParams {
     adGroupNames?: string[];
     creativeNames?: string[];
     keyword?: string;
+    keywordFields?: string[];
     investTimeStart?: string;
     investTimeEnd?: string;
     investDaysMin?: number;
@@ -106,7 +108,9 @@ export interface AdDataFilterParams {
     weekAnchorDate?: string;  // 周锚点日期：选中任意日期，定位到该日期所在的周
     weekCount?: number;  // 周复盘展示周数：1(默认)/2/4/8，从锚点周向前扩展
     creativeIdentityId?: string | string[];
+    idSearch?: string[];
     advertiser?: string[];
+    group?: string[];  // 组别筛选（组员映射最新生效组别，空/未传=全部组别）
     productionDateStart?: string;
     productionDateEnd?: string;
     productionDateEmpty?: boolean;
@@ -119,6 +123,7 @@ export interface SummaryData {
     totalCost: number;
     totalConversions: number;
     avgCost: number | null;
+    prevCost: number | null;
 }
 
 // ============ 趋势 ============
@@ -222,6 +227,8 @@ export interface DailyReportRow {
 export interface AdDataListParams extends AdDataFilterParams {
     page?: number;
     pageSize?: number;
+    sortField?: string;
+    sortOrder?: 'asc' | 'desc';
 }
 
 export interface SourceTableSummary {
@@ -327,6 +334,15 @@ export interface BatchUploadResponse {
     unmatchedDetails?: UnmatchedCreativeDetail[];
 }
 
+export interface BatchPollResponse {
+    found: boolean;
+    status?: UploadStatus;
+    result?: BatchUploadResponse;
+    errorMessage?: string;
+    progress?: number;
+    stage?: string;
+}
+
 export type UploadStatus = 'processing' | 'success' | 'failed';
 
 export interface CampaignMappingUploadRequest {
@@ -366,6 +382,7 @@ export interface UploadRecord {
     dataDateStart: string;
     dataDateEnd: string;
     processedAt: string;
+    startedAt: string;
 }
 
 export interface UploadRecordListParams {
@@ -396,6 +413,7 @@ export interface CountryTimesReportRow {
     totalCost: number;
     ccRatio: number;
     lcRatio: number;
+    cpa: number | null;
 }
 
 /** 国家时报响应 */
@@ -451,6 +469,33 @@ export interface BackupTableInfo {
 /** 备份表列表响应 */
 export interface BackupTableListResponse {
     tables: BackupTableInfo[];
+}
+
+/** 外部 RDB 会话诊断：单个活动会话 */
+export interface DiagDbActivitySession {
+    pid: number;
+    usename: string;
+    state: string;
+    waitEventType: string;
+    waitEvent: string;
+    xactSecs: number | null;
+    querySecs: number | null;
+    query: string;
+}
+
+/** 外部 RDB 会话诊断：锁阻塞关系 */
+export interface DiagDbBlockingPair {
+    blockedPid: number;
+    blockingPid: number;
+    blockingState: string;
+    blockingXactSecs: number | null;
+    blockingQuery: string;
+}
+
+/** 外部 RDB 会话诊断响应 */
+export interface DiagDbActivityResponse {
+    sessions: DiagDbActivitySession[];
+    blocking: DiagDbBlockingPair[];
 }
 
 /** 备份表数据查询参数 */
@@ -509,6 +554,7 @@ export interface BackupTableDataResponse {
 export interface MaterialDailyConsumptionRow {
     videoMaterialId: string;
     creativeName: string;
+    creativeNames?: string[];
     materialNameClean: string;
     materialType: string;
     country: string;
@@ -519,7 +565,10 @@ export interface MaterialDailyConsumptionRow {
     productionCapacity: number;
     rangeCost?: number;
     renovationStatus: string;
-    renovationMaterialId: string;
+    renovationMaterialIds: string[];
+    renovationIdsAligned: string;
+    renovationCountries: string;
+    renovationRequestDates: string;
     directorTeamGroup: string;
     postTeamGroup: string;
     lastCostDate: string;
@@ -593,7 +642,39 @@ export type ReportType =
     | 'team-tier'
     | 'monthly-tier'
     | 'monthly-distribution'
-    | 'country-registry';
+    | 'country-registry'
+    | 'market-consumption';
+
+// ============ 大盘日耗录入 ============
+
+export interface MarketConsumptionRow {
+    id: string;
+    day: string;
+    region: string;
+    consumption: number | null;
+}
+
+export interface MarketConsumptionListResponse {
+    items: MarketConsumptionRow[];
+}
+
+export interface UpdateMarketConsumptionRequest {
+    consumption: number | null;
+}
+
+export interface AddMarketConsumptionDayRequest {
+    day: string;
+    endDay?: string;
+}
+
+export interface AddMarketConsumptionDayResponse {
+    items: MarketConsumptionRow[];
+    created: number;
+}
+
+export interface MarketConsumptionSummaryResponse {
+    summary: Record<string, number | null>;
+}
 
 /** 素材分层周会单元格数据 */
 export interface MaterialWeeklyCellData {
@@ -638,6 +719,7 @@ export interface MaterialWeeklyDetailItem {
     clicks: number;
     impressions: number;
     ctr: number | null;
+    conversionRate: number | null;
     play2s: number;
     playCount: number;
     play2sRate: number | null;
@@ -655,6 +737,7 @@ export interface MaterialWeeklyDetailSummary {
     totalClicks: number;
     totalImpressions: number;
     ctr: number | null;
+    conversionRate: number | null;
     totalPlay2s: number;
     totalPlayCount: number;
     play2sRate: number | null;
@@ -804,7 +887,7 @@ export interface SevenBySevenParams extends AdDataFilterParams {
     observationWindowDays?: number;
     /** 分周模式：产出起始日期（YYYYMMDD），默认上一个完整周结束 */
     productionDateStart?: string;
-    /** @deprecated 分周模式：产出结束日期，已由 productionDateStart 替代 */
+    /** 分周模式：产出结束日期（YYYYMMDD，可选），提供时与 productionDateStart 组成产出日期范围，起始日晚于该日的组被截断 */
     productionDateEnd?: string;
     /** 分月模式：爆款阈值（美元，默认 3000） */
     hitThreshold?: number;
@@ -900,6 +983,8 @@ export interface MonthlyTierRow {
 export interface MonthlyTierResponse {
     items: MonthlyTierRow[];
     groupNames: string[];
+    /** 首消日期在消耗窗口末日之后、仍计入当期 0 耗的素材数 */
+    zeroCostAfterWindowCount?: number;
 }
 
 /** 月分层请求参数 */
@@ -924,6 +1009,8 @@ export interface TeamTierParams extends AdDataFilterParams {
     consumptionDays?: number;
     /** 分周模式：产出起始日期（YYYYMMDD） */
     productionDateStart?: string;
+    /** 分周模式：产出结束日期（YYYYMMDD，可选），与 productionDateStart 组成产出日期范围过滤 */
+    productionDateEnd?: string;
     /** 分层模式：产出日期范围起 */
     productionDateStartLadder?: string;
     /** 分层模式：产出日期范围止 */
@@ -961,6 +1048,7 @@ export interface TeamTierDetailItem {
     clicks: number;
     impressions: number;
     ctr: number | null;
+    conversionRate: number | null;
     play2s: number;
     playCount: number;
     play2sRate: number | null;
@@ -977,6 +1065,7 @@ export interface TeamTierDetailSummary {
     totalClicks: number;
     totalImpressions: number;
     ctr: number | null;
+    conversionRate: number | null;
     totalPlay2s: number;
     totalPlayCount: number;
     play2sRate: number | null;
@@ -989,6 +1078,14 @@ export interface TeamTierDetailResponse {
     items: TeamTierDetailItem[];
     total: number;
     summary: TeamTierDetailSummary;
+}
+
+export interface CapacityDemandColumn {
+    id: number;
+    name: string;
+    colType: 'text' | 'number';
+    groupKey: string;
+    sortOrder: number;
 }
 
 export interface CapacityDemandRow {
@@ -1004,27 +1101,29 @@ export interface CapacityDemandRow {
     demandTts: string | null;
     demandNonshop: string | null;
     demandGeneral: string | null;
-    liveAction: number | null;
-    editAe: number | null;
-    editAigc: number | null;
-    liveStudio: number | null;
-    liveTts: number | null;
-    liveNonshop: number | null;
-    liveGeneral: number | null;
-    aeLive: number | null;
-    aeTts: number | null;
-    aeNonshop: number | null;
-    aeGeneral: number | null;
-    aigcLive: number | null;
-    aigcTts: number | null;
-    aigcNonshop: number | null;
-    aigcGeneral: number | null;
+    liveAction: string | null;
+    editAe: string | null;
+    editAigc: string | null;
+    liveStudio: string | null;
+    liveTts: string | null;
+    liveNonshop: string | null;
+    liveGeneral: string | null;
+    aeLive: string | null;
+    aeTts: string | null;
+    aeNonshop: string | null;
+    aeGeneral: string | null;
+    aigcLive: string | null;
+    aigcTts: string | null;
+    aigcNonshop: string | null;
+    aigcGeneral: string | null;
     remark: string;
+    customData: Record<string, string | number | null>;
 }
 
 export interface CapacityCountryStats {
     submittedNotDownloaded: number;
     inAudit: number;
+    notSubmitted: number;
 }
 
 export interface CapacityWeekActuals {
@@ -1049,16 +1148,28 @@ export interface CapacityDemandListResponse {
     total: number;
     stats: Record<string, CapacityCountryStats>;
     actuals: CapacityWeekActuals;
+    columns: CapacityDemandColumn[];
+}
+
+export interface CapacityWeekItem {
+    week: string;
+    label: string;
 }
 
 export interface CapacityWeeksResponse {
-    weeks: string[];
+    weeks: CapacityWeekItem[];
     defaultWeek: string;
 }
 
 export type CapacityDemandRowPatch = Partial<
     Omit<CapacityDemandRow, 'id' | 'week'>
->;
+> & { customData?: Record<string, string | number | null> };
+
+export interface CapacityDemandCreateColumnBody {
+    name: string;
+    colType: 'text' | 'number';
+    groupKey: string;
+}
 
 export interface CapacityDemandCreateBody {
     week: string;
@@ -1212,12 +1323,31 @@ export interface SaveTablePreferencesRequest {
 
 // ============ 表格视图管理 ============
 
+/** 透视值字段配置（字段 + 聚合方式） */
+export interface PivotValueConfig {
+    fieldKey: string;
+    aggregation: string;
+    showAs?: string;
+    label?: string;
+}
+
+/** 透视布局：字段在筛选/行/列/值四个区域的归属 */
+export interface PivotLayoutConfig {
+    filters: string[];
+    rows: string[];
+    columns: string[];
+    values: PivotValueConfig[];
+}
+
 /** 表格视图 */
 export interface TableView {
     id: string;
     name: string;
     source: string;
     fields: string[];
+    /** 透视布局（区域归属 + 聚合方式）；旧视图无此字段 */
+    pivot?: PivotLayoutConfig | null;
+    scope: 'personal' | 'shared';
     createdAt: string;
     updatedAt: string;
 }
@@ -1227,6 +1357,8 @@ export interface CreateTableViewRequest {
     name: string;
     source: string;
     fields: string[];
+    pivot?: PivotLayoutConfig | null;
+    scope?: 'personal' | 'shared';
 }
 
 /** 更新视图请求 */
@@ -1234,6 +1366,8 @@ export interface UpdateTableViewRequest {
     name?: string;
     source?: string;
     fields?: string[];
+    pivot?: PivotLayoutConfig | null;
+    scope?: 'personal' | 'shared';
 }
 
 /** 视图列表响应 */
@@ -1261,24 +1395,58 @@ export interface NcaRecord {
     id: string;
     sourceDate: string;
     campaignId: string;
-    reportingAdId: string;
-    reportingTemplateCreativeId: string;
+    adGroupId: string;
     advertiserId: string;
-    ncaCpa: number | null;
-    newUserActivated: number;
-    paidAdCost: number;
+    adGroupName: string;
+    country: string;
+    newOrReactivate: string;
+    campaignName: string;
+    cost: string;
+    paidQuantityWeb: string;
+    cpa: string;
+    ncaCpa: string;
+    newUserActivated: string;
+    paidAdCost: string;
 }
 
 export interface NcaListParams {
     sourceDateStart?: string;
     sourceDateEnd?: string;
     campaignId?: string;
-    advertiserId?: string;
     keyword?: string;
+    keywordFields?: string[];
+    ncaCountries?: string[];
+    newOrReactivate?: string;
     page?: number;
     pageSize?: number;
     sortField?: string;
     sortOrder?: 'asc' | 'desc';
+    dateField?: string;
+}
+
+export interface NcaRawRecord {
+    id: string;
+    sourceDate: string;
+    campaignId: string;
+    adGroupId: string;
+    creativeId: string;
+    advertiserId: string;
+    ncaCpa: string;
+    newUserActivated: string;
+    paidAdCost: string;
+    adGroupName: string;
+}
+
+export interface NcaRawListResponse {
+    items: NcaRawRecord[];
+    total: number;
+    summary?: NcaRawSummary | null;
+}
+
+export interface NcaRawSummary {
+    avgNcaCpa: string;
+    totalNewUserActivated: string;
+    totalPaidAdCost: string;
 }
 
 export interface NcaListResponse {
@@ -1288,9 +1456,12 @@ export interface NcaListResponse {
 }
 
 export interface NcaSummary {
-    totalCost: number;
+    totalPaidAdCost: number;
     totalNewUserActivated: number;
     avgNcaCpa: number | null;
+    totalCost: number;
+    totalPaidQuantityWeb: number;
+    avgCpa: number | null;
 }
 
 export interface NcaUploadRequest {
@@ -1304,12 +1475,63 @@ export interface NcaUploadResponse {
     validRows: number;
     dataDateStart: string;
     dataDateEnd: string;
+    promoteMatched?: number;
     errors?: string[];
 }
 
 export interface NcaDeleteResponse {
     success: boolean;
     deletedCount: number;
+}
+
+export interface NcaNormalizeDateResponse {
+    success: boolean;
+    updatedCount: number;
+    totalCount: number;
+    invalidCount: number;
+    dedupRemovedCount: number;
+}
+
+// ============ NCA 结算 ============
+
+export interface NcaAssessmentRecord {
+    seq: number;
+    countryCode: string;
+    countryName: string;
+    roiAssessment: string;
+    newAssessment: string;
+    reactivateAssessment: string;
+    ncaAssessment: string;
+}
+
+export interface NcaSettlementRecord {
+    region: string;
+    country: string;
+    countryCode: string;
+    totalCost: number;
+    ratio: number;
+    newCost: number;
+    newCpa: number | null;
+    newRoiAssessment: string;
+    reactivateCost: number;
+    reactivateCpa: number | null;
+    historyCost: number;
+    historyNcaCpa: number | null;
+    newCpaAssessment: string;
+    reactivateCpaAssessment: string;
+    historyNcaCpaAssessment: string;
+    newConversions: number;
+    reactivateConversions: number;
+    ncaConversions: number;
+    newCompletionRate: string;
+    reactivateCompletionRate: string;
+    historyCompletionRate: string;
+}
+
+export interface NcaSettlementResponse {
+    dateLabel: string;
+    items: NcaSettlementRecord[];
+    grandTotal: number;
 }
 
 // ============ Creative Assets Export 数据源 ============
@@ -1331,6 +1553,7 @@ export interface CreativeAssetsRecord {
     cleanedMaterialName: string;
     materialDate: string;
     zeroCostFlag: string;
+    firstCostDate: string;
     videoMaterialId: string;
     isManualDate: boolean;
 }
@@ -1341,6 +1564,7 @@ export interface CreativeAssetsListParams {
     placement?: string;
     creativeSource?: string;
     keyword?: string;
+    keywordFields?: string[];
     materialDateFrom?: string;
     materialDateTo?: string;
     zeroCostOnly?: boolean;
@@ -1404,6 +1628,7 @@ export interface CreativeAssetRegistryRecord {
     scriptTagLevel2: string;
     lateEditor: string;
     country: string;
+    sourceTable: string;
     sourceTableId: string;
     bitableRecordId: string;
     useCase: string;
@@ -1415,6 +1640,7 @@ export interface CreativeAssetRegistryRecord {
     conversions: number | null;
     ctr: number | null;
     cpa: number | null;
+    conversionRate: number | null;
     play2s: number | null;
     playCount: number | null;
     playComplete: number | null;
@@ -1429,11 +1655,14 @@ export interface CreativeAssetRegistryRecord {
     materialDate: string;
     materialDatePlus3: string;
     monitoringStatus: string;
+    firstCostDate: string | null;
     investmentDays: number | null;
     dailyAvgCost: number | null;
     week: string;
     teamLeader: string;
+    sourceType: string;
     videoUrl: string | null;
+    rejectionReason: string;
 }
 
 export interface CapacityPlanningRecord {
@@ -1461,6 +1690,7 @@ export interface CapacityPlanningListParams {
     week?: string;
     country?: string;
     groupMembers?: string;
+    sourceType?: string;
     view?: 'country' | 'group' | 'custom';
 }
 
@@ -1472,6 +1702,7 @@ export interface CapacityPlanningListResponse {
     submittedByCountry: Record<string, number>;
     submittedByGroup: Record<string, number>;
     totalSubmitted: number;
+    totalTarget: number;
 }
 
 export interface DeatomizedListItem {
@@ -1488,10 +1719,24 @@ export interface DeatomizedListParams {
     country?: string;
     groupMembers?: string;
     auditStatus?: string;
+    sourceType?: string;
 }
 
 export interface DeatomizedListResponse {
     items: DeatomizedListItem[];
+}
+
+export interface CapacityDeatomizeDiagnosticItem {
+    week: string;
+    rawSubmitted: number;
+    rawInternalReview: number;
+    deatomizedSubmitted: number;
+    deatomizedInternalReview: number;
+    targetCount: number;
+}
+
+export interface CapacityDeatomizeDiagnosticResponse {
+    items: CapacityDeatomizeDiagnosticItem[];
 }
 
 export interface CapacityPlanningFilterOptions {
@@ -1499,12 +1744,15 @@ export interface CapacityPlanningFilterOptions {
     countries: string[];
     groups: string[];
     auditStatuses: string[];
+    sourceTypes: string[];
+    defaultWeek?: string;
 }
 
 export interface CapacityPlanningSyncResponse {
     success: boolean;
     syncedCount: number;
     totalCount: number;
+    submittedCount?: number;
     lastSyncedAt?: string;
     errors?: string[];
 }
@@ -1567,6 +1815,7 @@ export interface RegistryListParams {
     page?: number;
     pageSize?: number;
     keyword?: string;
+    keywordFields?: string[];
     country?: string;
     sortField?: string;
     sortOrder?: 'asc' | 'desc';
@@ -1576,6 +1825,7 @@ export interface RegistryListParams {
     productionDateStart?: string;
     productionDateEnd?: string;
     productionDateEmpty?: boolean;
+    rejectionReasonNotEmpty?: boolean;
 }
 
 export interface RegistryListSummary {
@@ -1629,6 +1879,7 @@ export interface DimensionGroupRecord {
     impressions: number | null;
     ctr: number | null;
     cpa: number | null;
+    conversionRate: number | null;
     conversions: number | null;
     play2s: number | null;
     playCount: number | null;
@@ -1674,6 +1925,7 @@ export interface DimensionRecordsListResponse {
 
 export interface RegistryFilterOptions {
     country: string[];
+    sourceTable: string[];
     director: string[];
     lateEditor: string[];
     functionName: string[];
@@ -1761,66 +2013,9 @@ export interface FeishuBotSendResult {
     success: boolean;
     matchedCount: number;
     message: string;
+    skipped?: boolean;
 }
 
-// ============ TikTok 报表 ============
-
-export interface TikTokConfigStatus {
-    configured: boolean;
-    hasToken: boolean;
-    appId: string | null;
-    advertiserIds: string[];
-    tokenExpiresAt: string | null;
-    proxyUrl: string | null;
-}
-
-export interface TikTokAuthUrlResponse {
-    authUrl: string;
-}
-
-export interface TikTokTokenExchangeRequest {
-    authCode: string;
-}
-
-export interface TikTokReportParams {
-    advertiserIds: string[];
-    reportType: string;
-    dataLevel: string;
-    dimensions: string[];
-    metrics: string[];
-    startDate: string;
-    endDate: string;
-    page?: number;
-    pageSize?: number;
-}
-
-export interface TikTokReportRow {
-    dimensions: Record<string, string>;
-    metrics: Record<string, number | string | null>;
-}
-
-export interface TikTokReportResponse {
-    list: TikTokReportRow[];
-    pageInfo: {
-        page: number;
-        pageSize: number;
-        totalNumber: number;
-        totalPages: number;
-    };
-}
-
-export interface TikTokSaveConfigRequest {
-    appId: string;
-    appSecret: string;
-    accessToken: string;
-    advertiserIds: string[];
-    proxyUrl?: string | null;
-}
-
-export interface TikTokCredentialsResponse {
-    accessToken: string;
-    advertiserIds: string[];
-}
 
 export interface RoiRecord {
     id: string;
@@ -1860,10 +2055,12 @@ export interface RoiListParams {
     page?: number;
     pageSize?: number;
     keyword?: string;
+    keywordFields?: string[];
     campaignId?: string;
     dateStart?: string;
     dateEnd?: string;
     countries?: string;
+    materialTypes?: string;
     costMin?: string;
     roiMin?: string;
     sortField?: string;
@@ -1873,6 +2070,10 @@ export interface RoiListParams {
 
 export interface RoiCountriesResponse {
     countries: string[];
+}
+
+export interface RoiMaterialTypesResponse {
+    materialTypes: string[];
 }
 
 export interface RoiListSummary {
@@ -1896,6 +2097,43 @@ export interface RoiSyncResponse {
     success: boolean;
     totalRows: number;
     message?: string;
+    status?: 'success' | 'skipped' | 'failed';
+    reason?: string;
+    syncDate?: string;
+    syncTime?: string;
+    lastSyncTime?: string;
+    lastSyncCount?: number;
+    feishuRowCount?: number;
+    syncedCount?: number;
+    durationMs?: number;
+    error?: string;
+    inserted?: number;
+    skipped?: number;
+    assessmentUpdated?: number;
+    async?: boolean;
+    taskId?: number;
+}
+
+export interface RoiUpdateTaskStatus {
+    status: 'idle' | 'running' | 'success' | 'failed';
+    taskId?: number;
+    message?: string;
+    inserted?: number;
+    skipped?: number;
+    assessmentUpdated?: number;
+    totalRows?: number;
+    startedAt?: string;
+    finishedAt?: string;
+}
+
+export interface RoiSyncStatusResponse {
+    latestSync: {
+        syncDate: string;
+        syncTime: string;
+        rowCount: number;
+        skipReason: string | null;
+    } | null;
+    todaySynced: boolean;
 }
 
 export interface RoiAgentOptionsResponse {
@@ -1932,27 +2170,54 @@ export interface RoiCountryRoiRow {
     totalCost: number;
     totalGmv: number;
     totalRoi: number;
-    cumulativeCost: number;
-    cumulativeGmv: number;
-    cumulativeRoi: number;
+    earlyCost: number;
+    earlyGmv: number;
+    earlyRoi: number;
+    earlyAchievement: number | null;
+    lateCost: number;
+    lateGmv: number;
+    lateRoi: number;
+    lateAchievement: number | null;
     assessment: number | null;
+    assessmentNew: number | null;
+    assessmentForDate: number | null;
+}
+
+export interface RoiCountryPeriodSummary {
+    country: string;
+    earlyCost: number;
+    earlyGmv: number;
+    earlyRoi: number;
+    earlyAchievement: number | null;
+    lateCost: number;
+    lateGmv: number;
+    lateRoi: number;
+    lateAchievement: number | null;
+    newCost: number;
+    newGmv: number;
+    newRoi: number;
+    newAchievement: number | null;
 }
 
 export interface RoiCountryRoiResponse {
     items: RoiCountryRoiRow[];
     total: number;
+    periodSummary?: RoiCountryPeriodSummary[];
 }
 
 // ============ ROI 素材 ============
 
 export interface RoiMaterialParams {
     keyword?: string;
+    keywordFields?: string[];
     materialIds?: string;
     materialNames?: string;
     dateStart?: string;
     dateEnd?: string;
     page?: number;
     pageSize?: number;
+    sortField?: string;
+    sortOrder?: 'asc' | 'desc';
 }
 
 // ============ 投放国家收录 ============
@@ -1964,6 +2229,8 @@ export interface CountryRegistryRow {
     region: string;
     assessmentMetric: string;
     assessmentValue: string;
+    assessmentValueNew: string;
+    assessmentValueOct: string;
     status: '投放中' | '已暂停' | '未投放';
     createdAt: string;
     updatedAt: string;
@@ -1989,6 +2256,8 @@ export interface CountryRegistryCreateDto {
     region: string;
     assessmentMetric?: string;
     assessmentValue?: string;
+    assessmentValueNew?: string;
+    assessmentValueOct?: string;
     status: '投放中' | '已暂停' | '未投放';
 }
 
@@ -2021,6 +2290,8 @@ export interface CountryRegistryUpdateDto {
     region?: string;
     assessmentMetric?: string;
     assessmentValue?: string;
+    assessmentValueNew?: string;
+    assessmentValueOct?: string;
     status?: '投放中' | '已暂停' | '未投放';
 }
 
@@ -2144,12 +2415,265 @@ export interface RoiDailyMeetingDataResponse {
     summary: RoiDailyMeetingSummary[];
     rows: RoiDailyMeetingRow[];
     blankRows: RoiDailyMeetingBlankRow[];
+    overrides: Record<string, string>;
     dateRange: {
         availableFrom: string;
         availableTo: string;
         currentFrom: string;
         currentTo: string;
     };
+}
+
+export interface RoiDailyMeetingCellSaveBody {
+    agent: string;
+    value: string;
+    formula?: string;
+    style?: RoiDailyMeetingCellStyle;
+}
+
+export interface RoiDailyMeetingCellStyle {
+    bg?: string;
+    fc?: string;
+    fs?: number;
+    b?: number;
+    i?: number;
+    u?: number;
+    ha?: string;
+    va?: string;
+    nf?: string;
+}
+
+export interface RoiSheetRowOpRequest {
+    agent: string;
+    atRow: number;
+    count: number;
+    position: 'above' | 'below';
+}
+
+export interface RoiSheetColOpRequest {
+    agent: string;
+    atCol: number;
+    count: number;
+    position: 'left' | 'right';
+}
+
+export interface RoiSheetDeleteRowsRequest {
+    agent: string;
+    fromRow: number;
+    toRow: number;
+}
+
+export interface RoiSheetDeleteColsRequest {
+    agent: string;
+    fromCol: number;
+    toCol: number;
+}
+
+export interface RoiSheetShiftCellsRequest {
+    agent: string;
+    r1: number;
+    c1: number;
+    r2: number;
+    c2: number;
+    direction: 'right' | 'down';
+}
+
+export interface RoiSheetOpResponse {
+    ok: boolean;
+}
+
+export interface RoiCellHistoryItem {
+    id: string;
+    operation: string;
+    oldValue: string;
+    newValue: string;
+    editor: string;
+    updatedAt: string;
+}
+
+export interface RoiCellHistoryListResponse {
+    items: RoiCellHistoryItem[];
+}
+
+export interface RoiCellComment {
+    id: string;
+    rowKey: string;
+    colKey: string;
+    content: string;
+    author: string;
+    createdAt: string;
+}
+
+export interface RoiCellCommentCreateRequest {
+    agent: string;
+    rowKey: string;
+    colKey: string;
+    content: string;
+}
+
+export interface RoiCellCommentsResponse {
+    items: RoiCellComment[];
+}
+
+export interface RoiCellNoteItem {
+    rowKey: string;
+    colKey: string;
+    content: string;
+    author: string;
+    updatedAt: string;
+}
+
+export interface RoiCellNoteSaveRequest {
+    agent: string;
+    rowKey: string;
+    colKey: string;
+    content: string;
+}
+
+export interface RoiCellNotesResponse {
+    items: RoiCellNoteItem[];
+}
+
+export type RoiValidationType =
+    | 'number-range'
+    | 'dropdown'
+    | 'text-length';
+
+export interface RoiValidationRule {
+    id: string;
+    r1: number;
+    c1: number;
+    r2: number;
+    c2: number;
+    ruleType: RoiValidationType;
+    params: string;
+    createdBy: string;
+    createdAt: string;
+}
+
+export interface RoiValidationCreateRequest {
+    agent: string;
+    r1: number;
+    c1: number;
+    r2: number;
+    c2: number;
+    ruleType: RoiValidationType;
+    params: string;
+}
+
+export interface RoiValidationsResponse {
+    items: RoiValidationRule[];
+}
+
+export interface RoiProtectedRange {
+    id: string;
+    r1: number;
+    c1: number;
+    r2: number;
+    c2: number;
+    createdBy: string;
+    createdAt: string;
+}
+
+export interface RoiProtectedRangeCreateRequest {
+    agent: string;
+    r1: number;
+    c1: number;
+    c2: number;
+    r2: number;
+}
+
+export interface RoiProtectedRangesResponse {
+    items: RoiProtectedRange[];
+}
+
+export interface RoiDailyMeetingSheetCell {
+    r: number;
+    c: number;
+    v: string;
+    f?: string;
+    style?: RoiDailyMeetingCellStyle;
+}
+
+export interface RoiSheetCreateRequest {
+    title: string;
+}
+
+export interface RoiSheetCreateResponse {
+    agent: string;
+    sheet: RoiDailyMeetingSheetMeta;
+}
+
+export interface RoiMergeSetRequest {
+    agent: string;
+    r1: number;
+    c1: number;
+    r2: number;
+    c2: number;
+}
+
+export type RoiCondFormatOp = 'gt' | 'lt' | 'eq' | 'between' | 'containsText';
+
+export interface RoiCondFormatRule {
+    id: string;
+    r1: number;
+    c1: number;
+    r2: number;
+    c2: number;
+    op: RoiCondFormatOp;
+    value1: string;
+    value2?: string;
+    bg?: string;
+    fc?: string;
+}
+
+export interface RoiCondFormatCreateRequest {
+    agent: string;
+    r1: number;
+    c1: number;
+    r2: number;
+    c2: number;
+    op: RoiCondFormatOp;
+    value1: string;
+    value2?: string;
+    bg?: string;
+    fc?: string;
+}
+
+export interface RoiCondFormatsResponse {
+    items: RoiCondFormatRule[];
+}
+
+export interface RoiDailyMeetingSheetMerge {
+    sr: number;
+    sc: number;
+    er: number;
+    ec: number;
+}
+
+export interface RoiDailyMeetingSheetMeta {
+    agent: string;
+    sheetId: string;
+    title: string;
+    frozenRows: number;
+    frozenCols: number;
+    rowCount: number;
+    colCount: number;
+    syncedAt: string;
+}
+
+export interface RoiDailyMeetingSheetsListResponse {
+    sheets: RoiDailyMeetingSheetMeta[];
+}
+
+export interface RoiDailyMeetingSheetDataResponse {
+    meta: RoiDailyMeetingSheetMeta;
+    cells: RoiDailyMeetingSheetCell[];
+    merges: RoiDailyMeetingSheetMerge[];
+}
+
+export interface RoiDailyMeetingCellSaveResponse {
+    success: boolean;
 }
 
 export interface RoiDailyMeetingNoteBody {
@@ -2218,63 +2742,99 @@ export interface RoiDailyMeetingCellHistoryQuery {
 
 export interface DimensionAnalysisItem {
     value: string;
-    capacity: number;
+    newCount: number;
     cost: number | null;
-    clicks: number | null;
-    impressions: number | null;
-    ctr: number | null;
     cpa: number | null;
     arpu: number | null;
+    ctr: number | null;
+}
+
+export interface MaterialFormulaItem {
+    industry: string;
+    materialType: string;
+    sourceType: string;
+    functionName: string;
+    requirement: string;
+    painPoint: string;
+    useCase: string;
+    displayText: string;
+    newCount: number;
+    cost: number | null;
+    cpa: number | null;
+    arpu: number | null;
+    ctr: number | null;
+}
+
+export interface MaterialAnalysisOverview {
+    newMaterialCount: number;
+    totalCost: number | null;
+    totalClicks: number | null;
+    totalImpressions: number | null;
+    ctr: number | null;
+    arpu: number | null;
+}
+
+export interface MaterialVolumeMetrics {
+    days: number;
+    totalDailyCost: number;
+    newDailyCost: number;
+    newCount: number;
+    newCostShare: number;
+    perNewDailyCost: number;
+    pSampleCount: number;
+    pSampleWarning: boolean;
 }
 
 export interface MaterialAnalysisResponse {
     dateFrom: string;
     dateTo: string;
+    countries: string[];
+    displayScope: 'active' | 'new';
+    overview: MaterialAnalysisOverview;
+    volumeMetrics: MaterialVolumeMetrics;
+    actualDailyCostByCountry: Record<string, number>;
     dimensions: Record<string, { label: string; items: DimensionAnalysisItem[] }>;
-    capacity: {
-        totalProduction: number;
-        totalCost: number | null;
-        avgCostPerProduction: number | null;
-        totalClicks: number | null;
-        totalImpressions: number | null;
-        ctr: number | null;
-        arpu: number | null;
-    };
+    formulas: MaterialFormulaItem[];
 }
 
-export interface CapacityPlanningItem {
-    rank: number;
-    direction: string;
-    tags: string[];
-    efficiency: number;
+export interface CapacityPlanRequest {
+    dateFrom: string;
+    dateTo: string;
+    countries: string[];
+    totalDailyBudget: number;
+    rNext?: number;
+}
+
+export interface CapacityPlanCountryResult {
+    country: string;
+    actualDailyCost: number;
     sharePercent: number;
-    reasons: string[];
-    priority: 'high' | 'medium' | 'low';
-    capacity: number;
-    cost: number;
-    dimension: string;
-    value: string;
-    ctr: number | null;
+    targetDailyBudget: number;
+    newCostShare: number;
+    perNewDailyCost: number;
+    suggestedCount: number;
+    sampleWarning: boolean;
+}
+
+export interface CapacityPlanFormula {
+    rank: number;
+    formula: MaterialFormulaItem;
+    suggestedCount: number;
+    sharePercent: number;
+    historyNewCount: number;
     cpa: number | null;
     arpu: number | null;
-}
-
-export interface CapacityPlanningDistribution {
-    dimension: string;
-    currentCapacity: number;
-    currentCost: number | null;
-    sharePercent: number;
+    ctr: number | null;
+    action: 'prioritize' | 'maintain' | 'cautious';
+    bLayer: { productionType: string; hookType: string; openingScene: string };
+    cLayer: { scriptTagLevel1: string; scriptTagLevel2: string; useCase: string };
 }
 
 export interface CapacityPlanningResponse {
-    summary: {
-        totalCapacity: number;
-        totalCost: number | null;
-        avgArpu: number | null;
-        recommendationCount: number;
-    };
-    recommendations: CapacityPlanningItem[];
-    distribution: CapacityPlanningDistribution[];
+    perCountry: CapacityPlanCountryResult[];
+    formulas: CapacityPlanFormula[];
+    totalSuggestedCount: number;
+    formulaBasis: string;
 }
 
 export interface DashboardChartConfig {
@@ -2459,6 +3019,7 @@ export interface MaterialSyncRecord {
 export interface MaterialSyncListRequest {
     source?: string;
     keyword?: string;
+    keywordFields?: string[];
     syncDateSort?: 'asc' | 'desc';
     xbCountMax?: number;
     page?: number;
@@ -2542,6 +3103,7 @@ export interface RenovationRequestRow {
 export interface RenovationRequestListResponse {
     items: RenovationRequestRow[];
     total: number;
+    expectedDeliveryCountSum: number;
 }
 
 export interface CreateRenovationRequestDto {
@@ -2564,6 +3126,24 @@ export interface CreateRenovationRequestDto {
 export interface UpdateRenovationRequestDto extends Partial<CreateRenovationRequestDto> {
 }
 
+export interface BatchDeleteRenovationRequestDto {
+    ids: string[];
+}
+
+export interface BatchDeleteRenovationRequestResponse {
+    deleted: number;
+}
+
+export interface BatchUpdateRenovationRequestDto {
+    ids: string[];
+    country?: string;
+    expectedDeliveryDate?: string | null;
+}
+
+export interface BatchUpdateRenovationRequestResponse {
+    updated: number;
+}
+
 export interface MigrateRequestDateItem {
     materialName: string;
     materialId?: string | null;
@@ -2578,6 +3158,12 @@ export interface MigrateRequestDateResponse {
 
 export interface BatchImportRenovationRequestDto {
     items: CreateRenovationRequestDto[];
+}
+
+export interface BatchImportRenovationRequestResponse {
+    total: number;
+    imported: number;
+    conflicts: Array<{ country: string; existingRequestDate: string | null }>;
 }
 
 export interface RenovationDuplicateConflict {
@@ -2699,4 +3285,269 @@ export interface MyTabAccessResponse {
     tabs: string[];
     memberGroups: string[] | null;
     progressGroups: string[] | null;
+}
+
+export interface ExportSourceInfo {
+    tableName: string;
+    label: string;
+    fields: ExportSourceField[];
+}
+
+export interface ExportSourceField {
+    columnName: string;
+    label: string;
+    type: 'text' | 'number' | 'date';
+}
+
+export interface ExportSyncRequest {
+    targetType: 'bitable' | 'sheets';
+    sourceTable: string;
+    sourceFields: string[];
+    filters: Record<string, string>;
+    targetConfig: ExportTargetConfig;
+    fieldMapping: Record<string, string>;
+}
+
+export interface ExportTargetConfig {
+    pluginInstanceId?: string;
+    spreadsheetToken?: string;
+    sheetName?: string;
+}
+
+export interface ExportSyncResponse {
+    addedCount: number;
+    updatedCount: number;
+    totalRecords: number;
+    durationMs: number;
+    targetType: string;
+}
+
+// ============ TikTok Auth ============
+
+export type TokenRefreshStatus = 'ok' | 'pending' | 'failed';
+
+export interface TokenStatusResponse {
+    hasToken: boolean;
+    hasRefreshToken: boolean;
+    valid: boolean;
+    longLived?: boolean;
+    expiresInHours: number;
+    lastRefreshedAt: string;
+    refreshStatus: TokenRefreshStatus;
+    alert?: string;
+}
+
+export interface AuthorizeRequest {
+    redirectBase?: string;
+}
+
+export interface AuthorizeUrlResponse {
+    authorizeUrl: string;
+    proxiedAuthorizeUrl?: string;
+    usedRedirectBase: string;
+}
+
+export interface TokenRefreshResponse {
+    success: boolean;
+    expiresInHours: number;
+    error?: string;
+}
+
+export interface ConnectionTestResponse {
+    success: boolean;
+    advertiserName?: string;
+    currency?: string;
+    timeZone?: string;
+    errorCode?: string;
+    errorMsg?: string;
+    networkOk?: boolean;
+    networkError?: string;
+    proxyMasked?: string;
+}
+
+export interface CredentialStatusResponse {
+    configured: boolean;
+    appIdMasked?: string;
+    appSecretMasked?: string;
+    missingKeys: string[];
+    redirectBase?: string;
+}
+
+export interface AdvertiserSummary {
+    advertiserId: string;
+    advertiserName: string;
+    currency: string;
+    timeZone: string;
+}
+
+export interface AdvertiserListItem {
+    advertiserId: string;
+    advertiserName: string;
+}
+
+export interface AdvertiserListResponse {
+    items: AdvertiserListItem[];
+    syncPrefix: string;
+    fallbackAdvertiserId?: string;
+}
+
+// ============ TikTok Pull Log ============
+
+export interface PullLogItem {
+    id: number;
+    taskType: 'daily' | 'hourly' | 'backfill_play';
+    triggerType: 'auto' | 'manual';
+    status: 'running' | 'success' | 'failure';
+    timeSlot: string | null;
+    recordsInserted: number | null;
+    datesPulled: string | null;
+    errorMessage: string | null;
+    attemptNumber: number | null;
+    startedAt: string;
+    finishedAt: string | null;
+}
+
+export interface PullLogListResponse {
+    items: PullLogItem[];
+    total: number;
+}
+
+// ============ TikTok Custom Report ============
+
+export interface TikTokReportField {
+    value: string;
+    label: string;
+    category: string;
+    dataLevel: string[];
+}
+
+export interface TiktokCustomReportRequest {
+    dimensions: string[];
+    metrics: string[];
+    startDate: string;
+    endDate: string;
+    dataLevel: string;
+    advertiserIds?: string[];
+    filtering?: Record<string, unknown>[];
+}
+
+export interface TiktokCustomReportResponse {
+    columns: string[];
+    rows: Record<string, unknown>[];
+    totalRows: number;
+}
+
+export interface TiktokPaginationDiagAccount {
+    advertiserId: string;
+    advertiserName: string;
+    firstPageRows: number;
+    totalNumber: number;
+    totalPage: number;
+    sampleRows?: Record<string, unknown>[];
+    errorCode?: number;
+    errorMessage?: string;
+}
+
+export interface TiktokPaginationDiagResponse {
+    dateStart: string;
+    dateEnd: string;
+    accounts: TiktokPaginationDiagAccount[];
+    sumTotalNumber: number;
+    sumFirstPageRows: number;
+    accountsAtMaxPage: number;
+    accountsWithShortPage: number;
+}
+
+// ============ Shooting Schedule ============
+
+export interface ShootingScheduleRow {
+    id?: string;
+    weekLabel: string;
+    weekStart: string;
+    weekday: string;
+    groupOrder: number;
+    groupName: string;
+    cameraPersons: string;
+    countries: string;
+    actualShootCount: number;
+    project: string;
+}
+
+export interface ShootingScheduleSaveRequest {
+    weekLabel: string;
+    weekStart: string;
+    rows: ShootingScheduleRow[];
+}
+
+export interface ShootingScheduleWeekItem {
+    weekLabel: string;
+    weekStart: string;
+    hasData: boolean;
+}
+
+export interface ShootingScheduleCameraOption {
+    name: string;
+}
+
+export interface ShootingScheduleCountryOption {
+    countryCode: string;
+    countryName: string;
+}
+
+// ============ 国家素材明细（双击国家消耗弹窗） ============
+
+export interface CountryMaterialDetailRow {
+    materialName: string;
+    cost: number;
+    ctr: number | null;
+    play2sRate: number | null;
+    playCompleteRate: number | null;
+    conversionRate: number | null;
+}
+
+export interface CountryMaterialDetailResponse {
+    items: CountryMaterialDetailRow[];
+    total: number;
+}
+
+export interface CountryMaterialDetailRequest {
+    date: string;
+    country: string;
+    group?: string[];
+    timeSlot?: string;
+}
+
+// ============ 单元格编辑历史 ============
+
+export interface CellHistoryTarget {
+    entity: string;
+    recordId: string;
+    recordLabel?: string;
+    fieldKey: string;
+    fieldLabel: string;
+}
+
+export interface CellHistoryRecord {
+    id: string;
+    entity: string;
+    recordId: string;
+    recordLabel: string | null;
+    fieldKey: string;
+    fieldLabel: string;
+    oldValue: string | null;
+    newValue: string | null;
+    editorId: string | null;
+    editorName: string | null;
+    editSource: string;
+    createdAt: string;
+}
+
+export interface CellHistoryQuery {
+    entity: string;
+    recordId: string;
+    fieldKey?: string;
+}
+
+export interface CellHistoryListResponse {
+    items: CellHistoryRecord[];
 }

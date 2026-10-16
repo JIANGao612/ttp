@@ -13,6 +13,8 @@ export interface SelectionStats {
     sum: number;
     count: number;
     average: number;
+    hiddenRowsInRange?: number;
+    hiddenColsInRange?: number;
 }
 
 export interface CellSelectionState {
@@ -85,12 +87,19 @@ export const CellSelectionProvider: React.FC<CellSelectionProviderProps> = ({
     const selectionStats = useMemo((): SelectionStats | null => {
         const {minR, maxR, minC, maxC} = getSelectionRange();
 
+        let hiddenRowsInRange = 0;
+        for (let r = minR; r <= maxR; r++) {
+            if (hiddenRows.has(r)) hiddenRowsInRange += 1;
+        }
+        let hiddenColsInRange = 0;
+        for (let c = minC; c <= maxC; c++) {
+            if (hiddenCols.has(c)) hiddenColsInRange += 1;
+        }
+
         let sum = 0;
         let count = 0;
         for (let r = minR; r <= maxR; r++) {
-            if (hiddenRows.has(r)) continue;
             for (let c = minC; c <= maxC; c++) {
-                if (hiddenCols.has(c)) continue;
                 const merge = isInMerge(merges, r, c);
                 if (merge && !isMergeOrigin(merge, r, c)) continue;
                 const cell = cells.get(cellKey(r, c));
@@ -118,7 +127,7 @@ export const CellSelectionProvider: React.FC<CellSelectionProviderProps> = ({
             }
         }
         if (count === 0) return null;
-        return {sum, count, average: sum / count};
+        return {sum, count, average: sum / count, hiddenRowsInRange, hiddenColsInRange};
     }, [selection, cells, merges, hiddenRows, hiddenCols, extraCells]);
 
     const value: CellSelectionState = {

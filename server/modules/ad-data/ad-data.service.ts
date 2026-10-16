@@ -234,6 +234,7 @@ export class AdDataService implements OnModuleInit {
             totalCost,
             totalConversions,
             avgCost: totalConversions > 0 ? Number((totalCost / totalConversions).toFixed(2)) : null,
+            prevCost: null,
         };
     }
 
@@ -491,6 +492,7 @@ export class AdDataService implements OnModuleInit {
                 countryCosts = {};
             }
             for (const [country, cost] of Object.entries(countryCosts)) {
+                // 改后（补 cpa）
                 items.push({
                     date: rec.record_date,
                     timeSlot: rec.time_slot as '12:00' | '16:00' | '22:00',
@@ -498,6 +500,7 @@ export class AdDataService implements OnModuleInit {
                     totalCost: Number(cost) || 0,
                     ccRatio: 0,
                     lcRatio: 0,
+                    cpa: null,
                 });
             }
         }

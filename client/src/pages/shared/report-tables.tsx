@@ -45,10 +45,10 @@ import {
     fmtRate,
     fmtDateYMD,
 } from './report-helpers';
-import {CellInteractionProvider} from './cell-interaction';
+import {TableWithSelection} from '@client/src/components/table-selection';
 import {useLoadMore} from './use-load-more';
-import {SOURCE_COLUMN_DEFS} from '@shared/source-columns';
-import {fmtPct} from '@shared/format-utils';
+import {SOURCE_COLUMN_DEFS, orderGroupName} from '@shared/source-columns';
+import {fmtPct, fmtCost2} from '@shared/format-utils';
 
 export {
     Th, Td, SummaryTd, MetricColumns, MetricHeaders, ReportShell, fmtInt, fmtRate, fmtCtr, fmtDateYMD
@@ -59,7 +59,7 @@ interface SourceColumn {
     label: string;
     width: number;
     sortable?: boolean;
-    format?: 'int' | 'rate' | 'date';
+    format?: 'int' | 'rate' | 'date' | 'cost';
     truncate?: boolean;
 }
 
@@ -76,6 +76,7 @@ const SOURCE_COLUMN_LAYOUT: Record<string, { width: number; truncate?: boolean; 
     cost: {width: 80, sortable: true},
     impressions: {width: 80, sortable: true},
     clicks: {width: 120, sortable: true},
+    playCount: {width: 90, sortable: true},
     play2s: {width: 120, sortable: true},
     playComplete: {width: 120, sortable: true},
     avgVideoPlayDuration: {width: 130, sortable: true},
@@ -84,6 +85,7 @@ const SOURCE_COLUMN_LAYOUT: Record<string, { width: number; truncate?: boolean; 
     country: {width: 100},
     materialType: {width: 100},
     agent: {width: 100},
+    groupName: {width: 140, truncate: true},
     dateValue: {width: 100, sortable: true},
     materialCategory: {width: 100},
     newOrActive: {width: 100},
@@ -125,23 +127,34 @@ export const SourceTable: React.FC<{ filters: AdDataFilterParams }> = ({filters}
     const sourceLocation = useLocation();
     usePersistedScroll(scrollRef, `${sourceLocation.pathname}:source`, loading);
 
+    const requestSeqRef = useRef(0);
     const fetchData = useCallback(async () => {
+        const seq = ++requestSeqRef.current;
         setLoading(true);
         try {
-            const {data} = await getAdDataList({...filters, page, pageSize});
+            // 改后（把 null 转成 undefined）
+            const {data} = await getAdDataList({
+                ...filters,
+                page,
+                pageSize,
+                sortField: sortField ?? undefined,
+                sortOrder: sortOrder ?? undefined,
+            });
+            if (seq !== requestSeqRef.current) return;
             setItems(data.items);
             setTotal(data.total);
             setSummary(data.summary ?? null);
         } catch (err) {
+            if (seq !== requestSeqRef.current) return;
             logger.error('Failed to load source list:', err);
             toast.error('加载数据失败，请稍后重试');
             setItems([]);
             setTotal(0);
             setSummary(null);
         } finally {
-            setLoading(false);
+            if (seq === requestSeqRef.current) setLoading(false);
         }
-    }, [filters, page, pageSize]);
+    }, [filters, page, pageSize, sortField, sortOrder]);
 
     useEffect(() => {
         setPage(1);
@@ -153,14 +166,23 @@ export const SourceTable: React.FC<{ filters: AdDataFilterParams }> = ({filters}
 
     const totalPages = Math.max(1, Math.ceil(total / pageSize));
 
-    const {widths: colWidths, startResize} = useColumnWidths(SOURCE_COLUMNS.map((c) => c.width));
+    const {
+        widths: colWidths,
+        startResize,
+        setColumnWidth
+    } = useColumnWidths(SOURCE_COLUMNS.map((c) => c.width), 'promote-source');
 
-    const displayItems = sortField ? sortItems(items, sortField, sortOrder) : items;
+    const displayItems = items;
 
-    const freeze = useTableFreeze({columnWidths: colWidths, rowCount: displayItems.length});
+    const freeze = useTableFreeze({
+        columnWidths: colWidths,
+        rowCount: displayItems.length,
+        persistKey: 'data-source',
+    });
 
     const onSort = (field: string) => {
         saveScroll();
+        setPage(1);
         handleSort(field);
     };
 
@@ -191,7 +213,7 @@ export const SourceTable: React.FC<{ filters: AdDataFilterParams }> = ({filters}
         if (!summary) return '';
         switch (key) {
             case 'cost':
-                return fmtInt(summary.totalCost);
+                return fmtCost2(summary.totalCost);
             case 'impressions':
                 return fmtInt(summary.totalImpressions);
             case 'clicks':
@@ -215,7 +237,7 @@ export const SourceTable: React.FC<{ filters: AdDataFilterParams }> = ({filters}
 
     return (
         <ReportShell loading={loading} total={total}>
-            <CellInteractionProvider>
+            <TableWithSelection>
                 <div ref={scrollRef} className="max-h-[60vh] overflow-auto" style={{overflowAnchor: 'none'}}>
                     <div ref={freeze.contentRef} className="relative min-w-max">
                         <table className="w-max border-separate border-spacing-0" style={{tableLayout: 'fixed'}}>
@@ -232,6 +254,7 @@ export const SourceTable: React.FC<{ filters: AdDataFilterParams }> = ({filters}
                                             style={thStyle(i)}
                                             resizable={i < colWidths.length - 1}
                                             onResizeStart={i < colWidths.length - 1 ? (x: number) => startResize(i, x) : undefined}
+                                            onAutoFit={(w: number) => setColumnWidth(i, w)}
                                             sortable={!!col.sortable}
                                             sortDirection={sortField === col.key ? sortOrder : null}
                                             onSort={col.sortable ? () => onSort(col.key) : undefined}
@@ -255,7 +278,10 @@ export const SourceTable: React.FC<{ filters: AdDataFilterParams }> = ({filters}
                                             } : undefined}
                                         >
                                             {SOURCE_COLUMNS.map((col, i) => {
-                                                const value = row[col.key];
+                                                const rawValue = row[col.key];
+                                                const value = col.key === 'groupName'
+                                                    ? orderGroupName(String(rawValue ?? ''))
+                                                    : rawValue;
                                                 if (col.truncate) {
                                                     return (
                                                         <Td key={col.key} className="truncate"
@@ -267,6 +293,10 @@ export const SourceTable: React.FC<{ filters: AdDataFilterParams }> = ({filters}
                                                 if (col.format === 'int') {
                                                     return <Td key={col.key} mono
                                                                style={tdStyle(i, isFrozenRow)}>{fmtInt(Number(value) || 0)}</Td>;
+                                                }
+                                                if (col.format === 'cost') {
+                                                    return <Td key={col.key} mono
+                                                               style={tdStyle(i, isFrozenRow)}>{fmtCost2(Number(value) || 0)}</Td>;
                                                 }
                                                 if (col.format === 'rate') {
                                                     const v = row[col.key];
@@ -290,7 +320,7 @@ export const SourceTable: React.FC<{ filters: AdDataFilterParams }> = ({filters}
                                     {SOURCE_COLUMNS.map((col, i) => (
                                         <SummaryTd
                                             key={col.key}
-                                            mono={col.format === 'int' || col.format === 'rate'}
+                                            mono={col.format === 'int' || col.format === 'rate' || col.format === 'cost'}
                                             style={summaryCellStyle(i)}
                                         >
                                             {i === 0 ? '合计' : summaryValue(col.key)}
@@ -303,7 +333,7 @@ export const SourceTable: React.FC<{ filters: AdDataFilterParams }> = ({filters}
                         <TableFreezeOverlays freeze={freeze} showRowDivider={displayItems.length > 0}/>
                     </div>
                 </div>
-            </CellInteractionProvider>
+            </TableWithSelection>
             <EnhancedPagination page={page} totalPages={totalPages} total={total} onPageChange={setPage}/>
             <div className="mt-2 flex items-center gap-2">
                 <span className="text-xs text-muted-foreground">每页显示</span>
@@ -318,7 +348,7 @@ export const SourceTable: React.FC<{ filters: AdDataFilterParams }> = ({filters}
                         <SelectValue/>
                     </SelectTrigger>
                     <SelectContent>
-                        {[50, 100, 200, 500].map((size) => (
+                        {[50, 100, 200].map((size) => (
                             <SelectItem key={size} value={String(size)} className="text-xs">
                                 {size} 条
                             </SelectItem>
@@ -338,6 +368,8 @@ export interface ReportTableProps<T> {
     defaultWidths: number[];
     summaryCells?: (colWidths: number[]) => React.ReactNode;
     preferenceKey?: string;
+    /** 冻结列持久化 key，缺省时回退 preferenceKey */
+    freezePersistKey?: string;
     /** External load-more handler — when provided, ReportTable delegates
      *  load-more to the parent and appends items instead of replacing. */
     onLoadMore?: () => void;
@@ -375,6 +407,7 @@ export function ReportTable<T extends ReportBaseFields>({
                                                             defaultWidths,
                                                             summaryCells,
                                                             preferenceKey,
+                                                            freezePersistKey,
                                                             onLoadMore,
                                                             loadMoreWeeks,
                                                             dedupeKey,
@@ -383,7 +416,7 @@ export function ReportTable<T extends ReportBaseFields>({
     const [total, setTotal] = useState(0);
     const [loading, setLoading] = useState(true);
     const [loadingMore, setLoadingMore] = useState(false);
-    const {widths: colWidths, startResize} = useColumnWidths(defaultWidths);
+    const {widths: colWidths, startResize, setColumnWidth} = useColumnWidths(defaultWidths, 'nca-source');
     const scrollRef = useRef<HTMLDivElement>(null);
     const {sortField, sortOrder, handleSort} = useSort<string>();
     const {saveScroll} = useScrollPreserve(scrollRef, `${sortField}-${sortOrder}`);
@@ -445,17 +478,21 @@ export function ReportTable<T extends ReportBaseFields>({
         </div>
     ) : null;
 
+    const requestSeqRef = useRef(0);
     const fetchData = useCallback(async (f: AdDataFilterParams, isLoadMore: boolean) => {
+        const seq = ++requestSeqRef.current;
         if (isLoadMore) setLoadingMore(true); else setLoading(true);
         try {
             const result = await fetcher(f);
+            if (seq !== requestSeqRef.current) return;
+            // 改后（把 dedupeKey 提到局部常量，用早返回建立明确分支）
             if (isLoadMore) {
                 setItems((prev: T[]) => {
-                    const keyFn = dedupeKey;   // 提取到局部变量，TypeScript 就能正确收窄类型
-                    const existing = keyFn ? new Set(prev.map(keyFn)) : null;
-                    const newItems = existing
-                        ? result.items.filter((item: T) => !existing.has(keyFn!(item)))
-                        : result.items;
+                    // 提取到局部常量，让类型收窄在闭包内仍成立
+                    const dk = dedupeKey;
+                    if (!dk) return [...prev, ...result.items];
+                    const existing = new Set(prev.map(dk));
+                    const newItems = result.items.filter((item: T) => !existing.has(dk(item)));
                     return [...prev, ...newItems];
                 });
             } else {
@@ -463,13 +500,16 @@ export function ReportTable<T extends ReportBaseFields>({
             }
             setTotal(result.total);
         } catch (err) {
+            if (seq !== requestSeqRef.current) return;
             logger.error('Failed to load report:', err);
             toast.error('加载报表数据失败，请稍后重试');
             setItems([]);
             setTotal(0);
         } finally {
-            setLoading(false);
-            setLoadingMore(false);
+            if (seq === requestSeqRef.current) {
+                setLoading(false);
+                setLoadingMore(false);
+            }
         }
     }, [fetcher]);
 
@@ -479,7 +519,11 @@ export function ReportTable<T extends ReportBaseFields>({
 
     const displayItems = sortField ? sortItems(items, sortField, sortOrder) : items;
 
-    const freeze = useTableFreeze({columnWidths: colWidths, rowCount: displayItems.length});
+    const freeze = useTableFreeze({
+        columnWidths: colWidths,
+        rowCount: displayItems.length,
+        persistKey: freezePersistKey ?? preferenceKey,
+    });
     const freezeScopeId = useId().replace(/\W/g, '');
 
     const onSort = (field: string) => {
@@ -511,7 +555,7 @@ export function ReportTable<T extends ReportBaseFields>({
     return (
         <ReportShell loading={loading} total={total}>
             {columnPresetBtn}
-            <CellInteractionProvider>
+            <TableWithSelection>
                 <div ref={scrollRef} className="max-h-[60vh] overflow-auto" style={{overflowAnchor: 'none'}}>
                     <div id={freezeScopeId} ref={freeze.contentRef} className="relative min-w-max">
                         {freeze.frozenCols > 0 && <style>{frozenColCss}</style>}
@@ -531,6 +575,7 @@ export function ReportTable<T extends ReportBaseFields>({
                                             onResizeStart={
                                                 i < colWidths.length - 1 ? (x: number) => startResize(i, x) : undefined
                                             }
+                                            onAutoFit={(w: number) => setColumnWidth(i, w)}
                                         >
                                             {label}
                                         </Th>
@@ -539,6 +584,7 @@ export function ReportTable<T extends ReportBaseFields>({
                                         widths={visibleColWidths}
                                         startIndex={extraHeaders.length}
                                         startResize={startResize}
+                                        setColumnWidth={setColumnWidth}
                                         colCount={colWidths.length}
                                         sortField={sortField}
                                         sortOrder={sortOrder}
@@ -577,6 +623,7 @@ export function ReportTable<T extends ReportBaseFields>({
                                         row={summary}
                                         startIndex={extraHeaders.length}
                                         widths={visibleColWidths}
+                                        summary
                                     />
                                 </tr>
                                 </tfoot>
@@ -585,7 +632,7 @@ export function ReportTable<T extends ReportBaseFields>({
                         <TableFreezeOverlays freeze={freeze} showRowDivider={displayItems.length > 0}/>
                     </div>
                 </div>
-            </CellInteractionProvider>
+            </TableWithSelection>
             {effectiveCanLoadMore && (
                 <div className="flex justify-center py-2">
                     <Button
@@ -621,26 +668,30 @@ export const DailyReportTable: React.FC<{
     const [items, setItems] = useState<DailyReportRow[]>([]);
     const [total, setTotal] = useState(0);
     const [loading, setLoading] = useState(true);
-    const {widths: colWidths, startResize} = useColumnWidths(DAILY_WIDTHS);
+    const {widths: colWidths, startResize, setColumnWidth} = useColumnWidths(DAILY_WIDTHS, 'ad-record-daily');
     const scrollRef = useRef<HTMLDivElement>(null);
     const {sortField, sortOrder, handleSort} = useSort<string>();
     const {saveScroll} = useScrollPreserve(scrollRef, `${sortField}-${sortOrder}`);
     const dailyReportLocation = useLocation();
     usePersistedScroll(scrollRef, `${dailyReportLocation.pathname}:daily-report`, loading);
 
+    const requestSeqRef = useRef(0);
     const fetchData = useCallback(async () => {
+        const seq = ++requestSeqRef.current;
         setLoading(true);
         try {
             const result = await fetcher(filters);
+            if (seq !== requestSeqRef.current) return;
             setItems(result.items);
             setTotal(result.total);
         } catch (err) {
+            if (seq !== requestSeqRef.current) return;
             logger.error('Failed to load daily report:', err);
             toast.error('加载日报表数据失败，请稍后重试');
             setItems([]);
             setTotal(0);
         } finally {
-            setLoading(false);
+            if (seq === requestSeqRef.current) setLoading(false);
         }
     }, [filters, fetcher]);
 
@@ -662,7 +713,7 @@ export const DailyReportTable: React.FC<{
 
     return (
         <ReportShell loading={loading} total={total}>
-            <CellInteractionProvider>
+            <TableWithSelection>
                 <div ref={scrollRef} className="max-h-[60vh] overflow-auto">
                     <table className="w-max border-separate border-spacing-0" style={{tableLayout: 'fixed'}}>
                         <colgroup>
@@ -680,6 +731,7 @@ export const DailyReportTable: React.FC<{
                                             style={thStyle(i)}
                                             resizable={i < colWidths.length - 1}
                                             onResizeStart={i < colWidths.length - 1 ? (x: number) => startResize(i, x) : undefined}
+                                            onAutoFit={(w: number) => setColumnWidth(i, w)}
                                             sortable={!!sortKey}
                                             sortDirection={sortField === sortKey ? sortOrder : null}
                                             onSort={sortKey ? () => onSort(sortKey) : undefined}
@@ -716,7 +768,7 @@ export const DailyReportTable: React.FC<{
                                     <Td mono style={{
                                         width: colWidths[5],
                                         maxWidth: colWidths[5]
-                                    }}>{fmtInt(row.totalCost)}</Td>
+                                    }}>{fmtCost2(row.totalCost)}</Td>
                                     <Td mono style={{
                                         width: colWidths[6],
                                         maxWidth: colWidths[6]
@@ -737,7 +789,7 @@ export const DailyReportTable: React.FC<{
                                 <tr>
                                     <SummaryTd colSpan={5}>汇总</SummaryTd>
                                     <SummaryTd mono style={{width: colWidths[5], maxWidth: colWidths[5]}}>
-                                        {fmtInt(sumCost)}
+                                        {fmtCost2(sumCost)}
                                     </SummaryTd>
                                     <SummaryTd mono style={{width: colWidths[6], maxWidth: colWidths[6]}}>
                                         {fmtInt(sumConv)}
@@ -751,7 +803,7 @@ export const DailyReportTable: React.FC<{
                         })()}
                     </table>
                 </div>
-            </CellInteractionProvider>
+            </TableWithSelection>
         </ReportShell>
     );
 };
@@ -777,7 +829,7 @@ export const MaterialTypeDailyTable: React.FC<{
     const [total, setTotal] = useState(0);
     const [loading, setLoading] = useState(true);
     const [loadingMore, setLoadingMore] = useState(false);
-    const {widths: colWidths, startResize} = useColumnWidths(MATERIAL_TYPE_WIDTHS);
+    const {widths: colWidths, startResize, setColumnWidth} = useColumnWidths(MATERIAL_TYPE_WIDTHS, 'creative-export');
     const scrollRef = useRef<HTMLDivElement>(null);
     const {sortField, sortOrder, handleSort} = useSort<string>();
     const {saveScroll} = useScrollPreserve(scrollRef, `${sortField}-${sortOrder}`);
@@ -814,7 +866,7 @@ export const MaterialTypeDailyTable: React.FC<{
     );
     const cellRenderers: ((row: MaterialTypeReportRow) => React.ReactNode)[] = [
         (row) => fmtDateYMD(row.date),
-        (row) => fmtInt(row.totalCost),
+        (row) => fmtCost2(row.totalCost),
         (row) => fmtInt(row.ugcStory),
         (row) => fmtInt(row.aigc),
         (row) => fmtInt(row.ae),
@@ -834,20 +886,26 @@ export const MaterialTypeDailyTable: React.FC<{
         [visibleSet],
     );
 
+    const requestSeqRef = useRef(0);
     const fetchData = useCallback(async (f: AdDataFilterParams, isLoadMore: boolean) => {
+        const seq = ++requestSeqRef.current;
         if (isLoadMore) setLoadingMore(true); else setLoading(true);
         try {
             const result = await fetcher(f);
+            if (seq !== requestSeqRef.current) return;
             setItems(result.items);
             setTotal(result.total);
         } catch (err) {
+            if (seq !== requestSeqRef.current) return;
             logger.error('Failed to load material type report:', err);
             toast.error('加载素材类型报表失败，请稍后重试');
             setItems([]);
             setTotal(0);
         } finally {
-            setLoading(false);
-            setLoadingMore(false);
+            if (seq === requestSeqRef.current) {
+                setLoading(false);
+                setLoadingMore(false);
+            }
         }
     }, [fetcher]);
 
@@ -886,7 +944,7 @@ export const MaterialTypeDailyTable: React.FC<{
                     buttonLabel="列设置"
                 />
             </div>
-            <CellInteractionProvider>
+            <TableWithSelection>
                 <div ref={scrollRef} className="max-h-[60vh] overflow-auto">
                     <table className="w-max border-separate border-spacing-0" style={{tableLayout: 'fixed'}}>
                         <colgroup>
@@ -905,6 +963,7 @@ export const MaterialTypeDailyTable: React.FC<{
                                             style={thStyle(vi)}
                                             resizable={vi < visibleWidths.length - 1}
                                             onResizeStart={vi < visibleWidths.length - 1 ? (x: number) => startResize(realIdx, x) : undefined}
+                                            onAutoFit={(w: number) => setColumnWidth(realIdx, w)}
                                             sortable={!!sortKey}
                                             sortDirection={sortKey && sortField === sortKey ? sortOrder : null}
                                             onSort={sortKey ? () => onSort(sortKey) : undefined}
@@ -941,7 +1000,7 @@ export const MaterialTypeDailyTable: React.FC<{
                             const aeRatio = sums.totalCost > 0 ? sums.ae / sums.totalCost : 0;
                             const allValues: string[] = [
                                 '汇总',
-                                fmtInt(sums.totalCost),
+                                fmtCost2(sums.totalCost),
                                 fmtInt(sums.ugcStory),
                                 fmtInt(sums.aigc),
                                 fmtInt(sums.ae),
@@ -971,7 +1030,7 @@ export const MaterialTypeDailyTable: React.FC<{
                         })()}
                     </table>
                 </div>
-            </CellInteractionProvider>
+            </TableWithSelection>
             {canLoadMore && (
                 <div className="flex justify-center py-2">
                     <Button

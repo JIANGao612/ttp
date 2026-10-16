@@ -25,6 +25,8 @@ import {
     User as UserIcon,// 用户图标
     KeyRound,        // 修改密码图标
     Users,           // 用户管理图标
+    Upload,
+    FileText,
 } from 'lucide-react';
 import {getStoredUser, clearToken} from '@client/src/utils/axios';
 
@@ -36,6 +38,8 @@ import {getStoredUser, clearToken} from '@client/src/utils/axios';
 const BASE_NAV_ITEMS = [
     {path: '/', label: 'Promote 数据源', icon: Database},
     {path: '/daily-times', label: '日报时报', icon: CalendarClock},
+    {path: '/upload', label: '上传数据', icon: Upload},
+    {path: '/creative-asset-registry', label: '内审表信息入库', icon: FileText},
 ];
 
 /** 仅管理员可见的菜单（会追加到 BASE_NAV_ITEMS 后面） */
